@@ -143,6 +143,10 @@ window.__ModuleLoader__.load({
       return react.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' },
         react.createElement('path', { d: 'M4 4l8 8M12 4l-8 8' }))
     }
+    function IconMove(react, direction) {
+      return react.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+        react.createElement('path', { d: direction < 0 ? 'M8 13V3M4 7l4-4 4 4' : 'M8 3v10M4 9l4 4 4-4' }))
+    }
     function IconChevron(react, open) {
       return react.createElement('svg', {
         width: 16, height: 16, viewBox: '0 0 16 16',
@@ -328,6 +332,34 @@ window.__ModuleLoader__.load({
         closeAddDialog()
       }
 
+      function moveEngine(index, direction) {
+        var target = index + direction
+        if (target < 0 || target >= engines.length) return
+        // Keep the persisted string-array format and the normal autosave
+        // path. Only the order changes; per-engine settings stay keyed by id.
+        var next = engines.slice()
+        next[index] = engines[target]
+        next[target] = engines[index]
+        setKey('searchEngines', next)
+      }
+
+      function moveButton(id, index, direction) {
+        var disabled = direction < 0 ? index === 0 : index === engines.length - 1
+        var label = direction < 0 ? t.enginesMoveUp : t.enginesMoveDown
+        return h('button', {
+          type: 'button', title: label, 'aria-label': label + ': ' + id,
+          disabled: disabled,
+          onClick: function () { moveEngine(index, direction) },
+          style: Object.assign({}, STYLES.iconBtn, disabled ? STYLES.iconBtnDisabled : null),
+          onMouseEnter: function (e) {
+            if (!disabled) Object.assign(e.currentTarget.style, STYLES.iconBtnHover)
+          },
+          onMouseLeave: function (e) {
+            Object.assign(e.currentTarget.style, STYLES.iconBtn, disabled ? STYLES.iconBtnDisabled : null)
+          },
+        }, IconMove(react, direction))
+      }
+
       var rows = engines.map(function (id, index) {
         var cfg = configs[id] || {}
         var needsKey = !!ENGINE_HAS_API_KEY[id]
@@ -348,6 +380,8 @@ window.__ModuleLoader__.load({
               hasKey ? t.enginesApiKeyConfigured : t.enginesApiKeyMissing)
             : null,
           h('div', { style: Object.assign({}, STYLES.engineActions, { marginLeft: 'auto' }) },
+            moveButton(id, index, -1),
+            moveButton(id, index, 1),
             h('button', {
               type: 'button', title: t.enginesEdit, 'aria-label': t.enginesEdit + ': ' + id,
               onClick: function () { openEngineDialog(id) },
