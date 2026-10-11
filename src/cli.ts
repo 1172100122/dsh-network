@@ -651,6 +651,16 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
       attempts: [{ engine: 'chain', error: 'empty query' }],
     }
   }
+  // The native provider belongs to the DSH host (credentials/account/audit).
+  // Never silently filter it out and run Bing when this CLI has no host.
+  if (flags.engine === 'deepseek-official' || (!flags.engine && config.searchEngines.includes('deepseek-official'))) {
+    return {
+      kind: 'search', engine: 'deepseek-official', status: 'unavailable',
+      summary: 'DeepSeek native search is host-only; run this search through the DSH plugin, or explicitly select a CLI engine.',
+      items: [], uncertainty: [], warnings: [],
+      attempts: [{ engine: 'deepseek-official', error: 'native search requires the DSH host' }],
+    }
+  }
   const max = flags.maxResults || config.searchMaxResults
   const override = typeof flags.engine === 'string' && flags.engine !== ''
     ? defaultRegistry.get(flags.engine)

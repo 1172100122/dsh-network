@@ -65,7 +65,8 @@
     "test:persist": "node tests/persist-smoke.mjs",
     "test:download": "node tests/download-cli-smoke.mjs",
     "test:schema": "node tests/schema-check.mjs",
-    "test:server": "node tests/server-smoke.mjs"
+    "test:server": "node tests/server-smoke.mjs",
+    "test:native": "node --expose-internals tests/native-host-smoke.mjs"
   },
   "dependencies": {
     "officeparser": "^7.8.0",
@@ -80,5 +81,17 @@
     "typescript": "^5.9.3",
     "vite": "^6.4.1",
     "vitest": "3.2.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-web": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-web-search-deepseek": "0.2.0-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-web": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-web-search-deepseek": {
+      "optional": true
+    }
   }
 }

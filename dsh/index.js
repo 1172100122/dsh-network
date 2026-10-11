@@ -35,6 +35,8 @@ import { loadPersistedConfig } from './persist.js'
 import { defaultConfig } from './config-summary.js'
 import { getNetworkClient, releaseNetworkClient } from './cli-runner.js'
 import { makeSearchProvider, makeFetchProvider } from './providers.js'
+import { createNativeSearch } from './native-search.js'
+import { createSearchRunner } from './search.js'
 import {
   registerWebSearchTool,
   registerWebFetchTool,
@@ -118,7 +120,10 @@ export function apply(ctx, rawConfig) {
   }
 
   // ── providers into the web seam ─────────────────────────────────────────
-  const searchProvider = makeSearchProvider(config)
+  const nativeSearch = createNativeSearch(ctx)
+  if (typeof ctx.effect === 'function') ctx.effect(() => () => nativeSearch.dispose())
+  const search = createSearchRunner(config, { nativeSearch: nativeSearch.search })
+  const searchProvider = makeSearchProvider(config, search)
   const fetchProvider = makeFetchProvider(config)
 
   // Both providers live on ctx.web and degrade gracefully in headless
@@ -139,7 +144,7 @@ export function apply(ctx, rawConfig) {
   }
 
   // ── model-facing tools ─────────────────────────────────────────────────
-  if (config.webSearchTool) registerWebSearchTool(ctx, config)
+  if (config.webSearchTool) registerWebSearchTool(ctx, config, search)
   if (config.webFetchTool) registerWebFetchTool(ctx, config)
   if (config.httpRequestTool) registerHttpRequestTool(ctx, config)
   if (config.webSitemapTool) registerWebSitemapTool(ctx, config)
@@ -163,7 +168,7 @@ export function apply(ctx, rawConfig) {
   // below; the legacy Plugins-tab card stays dormant in stock profiles.
   registerConfigRoute(ctx, config)
   registerHealthRoute(ctx)
-  registerSearchRoute(ctx, config)
+  registerSearchRoute(ctx, config, search)
 
   ctx.logger?.info?.(
     '[dsh-network] active (engines=%s, fetchTimeoutMs=%d, httpTimeoutMs=%d, tools: search=%s fetch=%s http=%s sitemap=%s config=%s download=%s, allowConfigEdit=%s)',

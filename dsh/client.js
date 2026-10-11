@@ -41,8 +41,8 @@ window.__ModuleLoader__.load({
     var module = { exports: {} }
     var exports = module.exports
 
-    var ENGINES = ['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave']
-    var ENGINE_LABELS = { bing: 'Bing', duckduckgo: 'DuckDuckGo', baidu: 'Baidu', github: 'GitHub', searxng: 'SearXNG', brave: 'Brave Search' }
+    var ENGINES = ['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave', 'deepseek-official']
+    var ENGINE_LABELS = { bing: 'Bing', duckduckgo: 'DuckDuckGo', baidu: 'Baidu', github: 'GitHub', searxng: 'SearXNG', brave: 'Brave Search', 'deepseek-official': 'DeepSeek (native)' }
 
     // ───────────────────────── helpers (shared) ─────────────────────────
     /** Locale dictionaries; registered with the locale service so the
@@ -87,6 +87,7 @@ window.__ModuleLoader__.load({
         enginesEnabled: '已启用',
         enginesEmpty: '至少保留一个搜索引擎',
         enginesEdit: '编辑搜索引擎',
+        enginesInfo: '引擎信息',
         enginesEditEndpoint: 'Endpoint',
         enginesEditApiKey: 'API Key',
         enginesEditOptions: '自定义参数（每行一个 key=value）',
@@ -121,6 +122,7 @@ window.__ModuleLoader__.load({
         engineHintBaidu: '百度网页搜索（免密钥，中文结果更佳）。',
         searxngHint: '自托管元搜索引擎（JSON API）。Endpoint 默认 http://127.0.0.1:8888，可修改；实例的 settings.yml 必须在 search.formats 中启用 json，否则请求返回 403。仅本引擎自动放行回环地址，其余路径仍受 SSRF 防护约束。',
         braveHint: 'Brave 官方 Search API（需要 API Key；2026-02 起已取消免费额度，按查询计费）。密钥只存在本机，浏览器读不到。可选 options（每行 key=value）：country=DE、searchLang=de、uiLang=de-DE、freshness=pw、safesearch=moderate、goggles=https://…、offset=0-9。未配置密钥时不会发出任何请求。',
+        deepseekNativeHint: '使用 DSH 原生搜索配置及账号，或 DEEPSEEK_API_KEY 凭据。搜索可能计费；可用性取决于兼容的 DSH 宿主（目标版本 0.2.0-rc.2）。凭据与原生设置由 DSH 管理，不在此处编辑。',
         userAgent: 'User-Agent',
         fetchTimeout: 'web_fetch 超时（毫秒）',
         searchTimeout: 'web_search 单引擎超时（毫秒）',
@@ -249,6 +251,7 @@ window.__ModuleLoader__.load({
         enginesEnabled: 'enabled',
         enginesEmpty: 'At least one engine must remain',
         enginesEdit: 'Edit search engine',
+        enginesInfo: 'Engine information',
         enginesEditEndpoint: 'Endpoint',
         enginesEditApiKey: 'API Key',
         enginesEditOptions: 'Custom options (one key=value per line)',
@@ -283,6 +286,7 @@ window.__ModuleLoader__.load({
         engineHintBaidu: 'Baidu web search (no key, best for Chinese).',
         searxngHint: 'Self-hosted metasearch via its JSON API. Endpoint defaults to http://127.0.0.1:8888 (editable); the instance must enable `json` in `search.formats` of its settings.yml or requests get a 403. Loopback access is granted for this engine only — SSRF guards stay on everywhere else.',
         braveHint: 'Brave Search API (needs an API key; the free tier was removed in Feb 2026, so every query is billed). The key stays on this machine and the browser never reads it back. Optional options (one key=value per line): country=DE, searchLang=de, uiLang=de-DE, freshness=pw, safesearch=moderate, goggles=https://…, offset=0-9. With no key configured no request is sent at all.',
+        deepseekNativeHint: 'Uses DSH native search settings and account, or the DEEPSEEK_API_KEY credential. Searches may be billed; availability depends on a compatible DSH host (target: 0.2.0-rc.2). Credentials and native settings are managed by DSH, outside this dialog.',
         userAgent: 'User-Agent',
         fetchTimeout: 'web_fetch timeout (ms)',
         searchTimeout: 'web_search per-engine timeout (ms)',

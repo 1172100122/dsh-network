@@ -422,6 +422,156 @@ describe('browser-half chunks render through the loader contract', () => {
     expect(adding).toContain('SearXNG')
   })
 
+  it('lists native DeepSeek without changing the default or an existing engine chain', async () => {
+    const { entry } = await createChunkLoader().load()
+    const { defaultConfig } = await import('../dsh/config-summary.js')
+    expect(entry.ENGINES).toContain('deepseek-official')
+    expect(entry.ENGINE_LABELS).toMatchObject({ 'deepseek-official': 'DeepSeek (native)' })
+    expect(defaultConfig({}).searchEngines).toEqual(['bing', 'duckduckgo', 'baidu'])
+    expect(defaultConfig({ searchEngines: ['github', 'bing'] }).searchEngines).toEqual(['github', 'bing'])
+  })
+
+  it.each(['zh-CN', 'en'])('renders native information without credential or ineffective controls in %s', async (lang) => {
+    const { entry, chunks } = await createChunkLoader().load()
+    document.documentElement.lang = lang
+    const t = labelsFrom(entry)
+    const captured: Array<Record<string, any>> = []
+    const spy = {
+      ...react,
+      createElement: (type: unknown, props: unknown, ...children: unknown[]) => {
+        const element = react.createElement(type as never, props as never, ...(children as never[]))
+        captured.push(element as unknown as Record<string, any>)
+        return element
+      },
+    }
+    const onChange = vi.fn(), onSave = vi.fn(), onCancel = vi.fn()
+    const Dialog = chunks['client.settings.js'].EngineDialog as (props: Record<string, unknown>) => unknown
+    // Even stale/injected generic configuration cannot appear as native
+    // settings or imply that a plugin-owned key controls DSH's account.
+    const html = renderNode(Dialog({
+      react: spy, t,
+      value: {
+        id: 'deepseek-official', endpoint: 'https://unused-endpoint.example',
+        apiKey: 'native-secret-must-not-render', hasApiKey: true,
+        options: { token: 'unused-option-must-not-render' },
+      },
+      onChange, onSave, onCancel,
+    }))
+    expect(html).toContain('DeepSeek (native)')
+    expect(html).toContain(t.enginesInfo)
+    expect(html).toContain(t.deepseekNativeHint)
+    expect(t.deepseekNativeHint).toContain('DEEPSEEK_API_KEY')
+    expect(t.deepseekNativeHint).toContain('0.2.0-rc.2')
+    expect(t.deepseekNativeHint).toContain(lang === 'en' ? 'may be billed' : '可能计费')
+    expect(t.deepseekNativeHint).toContain(lang === 'en' ? 'managed by DSH' : '由 DSH 管理')
+    expect(html).not.toContain('native-secret-must-not-render')
+    expect(html).not.toContain('unused-endpoint.example')
+    expect(html).not.toContain('unused-option-must-not-render')
+    expect(captured.filter((node) => ['input', 'textarea', 'select'].includes(node.type))).toHaveLength(0)
+    const buttons = captured.filter((node) => node.type === 'button')
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const button of buttons) {
+      expect(button.props.children).toBe(t.enginesEditClose)
+      button.props.onClick()
+    }
+    expect(onCancel).toHaveBeenCalledTimes(buttons.length)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it.each(['NetworkSection', 'ConfigCard'])('adds and reorders native DeepSeek only after opt-in in %s', async (surface) => {
+    const { entry, chunks } = await createChunkLoader().load()
+    const { defaultConfig, summarize, applyCardSettings } = await import('../dsh/config-summary.js')
+    const t = labelsFrom(entry)
+    const native = 'deepseek-official'
+    const config = defaultConfig({
+      searchEngines: ['bing', 'brave'],
+      searchEngineApiKeys: { brave: 'existing-brave-secret' },
+      searchEngineConfigs: { brave: { options: { country: 'DE' } } },
+    })
+    const writes: Array<Record<string, any>> = []
+    let revision = 1
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, options?: Record<string, any>) => {
+      expect(url).toBe('/dsh-network/config')
+      if (options?.method === 'PUT') {
+        expect(options.headers['if-match']).toBe(String(revision))
+        const patch = JSON.parse(options.body)
+        writes.push(patch)
+        applyCardSettings(config, patch)
+        revision++
+      }
+      return { ok: true, status: 200, json: async () => ({ value: summarize(config), revision }) }
+    }))
+    vi.useFakeTimers()
+    const harness = settingsHarness(chunks['client.settings.js'][surface] as (...args: unknown[]) => () => unknown)
+    try {
+      let nodes = harness.paint()
+      if (surface === 'ConfigCard') {
+        nodes.find((node) => node.props?.['aria-expanded'] === false)!.props.onClick()
+        harness.paint()
+      }
+      await vi.advanceTimersByTimeAsync(0)
+      nodes = harness.paint()
+      const order = () => nodes.filter((node) => node.type === 'button' && node.props?.title === t.enginesMoveUp)
+        .map((node) => node.props['aria-label'].slice(t.enginesMoveUp.length + 2))
+      const addButton = () => nodes.find((node) => node.type === 'button'
+        && react.Children.toArray(node.props.children).some((child: any) => child?.props?.children === t.enginesAdd))!
+      expect(order()).toEqual(['bing', 'brave'])
+      await vi.advanceTimersByTimeAsync(500)
+      expect(writes).toHaveLength(0)
+
+      addButton().props.onClick()
+      nodes = harness.paint()
+      const category = nodes.find((node) => node.type === 'button' && node.key === native)
+      expect(category, 'native engine is offered in the add catalog').toBeTruthy()
+      expect(renderNode(category)).toContain('DeepSeek (native)')
+      category!.props.onClick()
+      nodes = harness.paint()
+      expect(nodes.some((node) => node.props?.children === t.deepseekNativeHint)).toBe(true)
+      // Selection alone must not alter the active chain or bill a query.
+      expect(order()).toEqual(['bing', 'brave'])
+      await vi.advanceTimersByTimeAsync(500)
+      expect(writes).toHaveLength(0)
+      nodes.find((node) => node.type === 'button' && node.props?.children === t.enginesAddConfirm)!.props.onClick()
+      nodes = harness.paint()
+      expect(order()).toEqual(['bing', 'brave', native])
+      expect(nodes.some((node) => node.type === 'span' && node.props.children === 'DeepSeek (native)')).toBe(true)
+      nodes.find((node) => node.props?.['aria-label'] === t.enginesMoveUp + ': ' + native)!.props.onClick()
+      nodes = harness.paint()
+      expect(order()).toEqual(['bing', native, 'brave'])
+      await vi.advanceTimersByTimeAsync(500)
+      expect(writes).toHaveLength(1)
+      expect(config.searchEngines).toEqual(['bing', native, 'brave'])
+      expect(writes[0].searchEngineConfigs).not.toHaveProperty(native)
+      expect(JSON.stringify(writes[0])).not.toContain('existing-brave-secret')
+      expect(config.searchEngineApiKeys.brave).toBe('existing-brave-secret')
+      expect(config.searchEngineConfigs.brave.options).toEqual({ country: 'DE' })
+
+      nodes = harness.paint()
+      nodes.find((node) => node.props?.['aria-label'] === t.enginesInfo + ': ' + native)!.props.onClick()
+      nodes = harness.paint()
+      const dialog = nodes.find((node) => node.type === chunks['client.settings.js'].EngineDialog)!
+      expect(dialog.props.value).toEqual({ id: native })
+      expect(nodes.some((node) => node.type === 'button' && node.props.children === t.enginesEditSave)).toBe(false)
+      // The handler also rejects native saves if called directly; there is
+      // never a synthetic searchEngineConfigs entry for native credentials.
+      dialog.props.onSave()
+      nodes = harness.paint()
+      expect(nodes.some((node) => node.props?.role === 'dialog')).toBe(false)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(writes).toHaveLength(1)
+      expect(config.searchEngineConfigs).not.toHaveProperty(native)
+      addButton().props.onClick()
+      nodes = harness.paint()
+      expect(nodes.some((node) => node.type === 'button' && node.key === native)).toBe(false)
+    } finally {
+      harness.dispose()
+      vi.useRealTimers()
+      vi.stubGlobal('fetch', originalFetch)
+    }
+  })
+
   it.each(['NetworkSection', 'ConfigCard'])('reorders engines and autosaves the latest chain in %s', async (surface) => {
     const { entry, chunks } = await createChunkLoader().load()
     const { defaultConfig, summarize, applyCardSettings } = await import('../dsh/config-summary.js')

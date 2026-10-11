@@ -125,6 +125,7 @@ entry 40 with one `cacheId` call instead of re-fetching the URL.
 
 | Engine id | Credential |
 |---|---|
+| `deepseek-official` | DSH native account/credentials (optional; usage may be billed) |
 | `bing` | none |
 | `duckduckgo` | none |
 | `baidu` | none |
@@ -276,3 +277,7 @@ reference, including the loopback routes, is in
 
 MIT. See [LICENSE](LICENSE).
 
+
+### Optional native DeepSeek search
+
+Add **DeepSeek (native)** in Settings → Network → Search engines, then use the move controls to choose its fallback position. Existing chains remain unchanged. The plugin runs the official provider in an isolated Cordis scope using DSH-managed native settings and credentials. Verified with DSH **0.2.0-rc.2**; no host patch or duplicate Cordis installation is needed. Native failures fall back, valid empty results stop, and cancellation terminates the chain. Standalone CLI native searches report that a DSH host is required. See [native search](docs/native-search.md) for configuration and test details.

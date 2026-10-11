@@ -115,6 +115,7 @@ DeepSeek Harness 自带 `web_search` 和 `web_fetch`, 在模型撞上下面这�
 
 | 引擎 id | 凭据 |
 |---|---|
+| `deepseek-official` | DSH 原生配置与账户/凭据服务（可选，可能产生费用） |
 | `bing` | 无 |
 | `duckduckgo` | 无 |
 | `baidu` | 无 |
@@ -123,6 +124,8 @@ DeepSeek Harness 自带 `web_search` 和 `web_fetch`, 在模型撞上下面这�
 | `brave` | **需要密钥, 按量计费** |
 
 更多细节见[搜索引擎](docs/search-engines.md)。
+
+在 **设置 → 网络 → 搜索引擎 → 添加** 中选择 **DeepSeek (native)**，再用上移/下移调整优先级。已有搜索链不会自动改变。原生节点复用官方插件，在独立作用域运行；配置与登录由 DSH 管理，不在本插件中填写密钥。已验证 DSH **0.2.0-rc.2**，无需修改宿主或安装第二套 Cordis。原生调用失败时尝试下一节点；正常空结果停止搜索；取消立即终止。原生服务仅能在 DSH 宿主内运行，独立 CLI 会明确报告不可用。见[兼容与测试说明](docs/native-search.md)。
 
 ### 侧边栏网页搜索
 

@@ -25,6 +25,7 @@ const SEARCH_OUTPUT_SCHEMA = {
   properties: {
     status: { type: 'string', enum: ['ok', 'degraded', 'unavailable'] },
     engine: { type: 'string' },
+    truncated: { type: 'boolean' },
     summary: { type: 'string' },
     items: {
       type: 'array',
@@ -36,6 +37,7 @@ const SEARCH_OUTPUT_SCHEMA = {
           url: { type: 'string' },
           title: { type: 'string' },
           snippet: { type: 'string' },
+          published_at: { type: 'string' },
         },
       },
     },
