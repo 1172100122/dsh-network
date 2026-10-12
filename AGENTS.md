@@ -217,13 +217,100 @@ browser dialog → commitEngineDialog (PUT patch)
   drops handlers, so it uses a recording `createElement` spy to reproduce
   typing and saving). Those two specs are what hold the four hops together.
 
+### Mojeek: the credential is a cookie, and the PoW lives OUTSIDE the search path
+
+The engine id is **`mojeek-free`**, never `mojeek`: Mojeek also sells an
+official **Search API** (`api.mojeek.com`, billed, real API key), and the bare
+product name next to a settings field labelled "API Key" is exactly how a user
+ends up hunting for a subscription this plugin never uses. The suffix names
+what the engine is — the free, cookie-gated web SERP. The same reasoning names
+`src/engines/mojeek-free.ts`, `MojeekFreeSearchEngine` and the `MOJEEK_FREE_*`
+constants; only `buildMojeekUrl` / `parseMojeekResults` keep the bare product
+name, because they parse Mojeek's SERP whoever reaches it.
+
+Mojeek's HTML SERP sits behind an Altcha proof-of-work, and the engine's
+`auth` is `Cookie` with `DSH_NETWORK_MOJEEK_COOKIE` — the solved `chllg`
+cookie is just another entry in the key map. Two paths solve the Altcha:
+
+  - **Auto (persistent server only).** A `MojeekSession`
+    (`src/mojeek-session.ts`) is created once at server start and threaded
+    onto every `RunContext`. The first `mojeek-free` search after a fresh
+    install (~1-2 s Altcha solve) seeds it; later searches just reuse the
+    cached cookie. A `200` + challenge page also re-solves inside the same
+    call, so the user never sees a stale-cookie warning. Single-shot CLI gets
+    no session — it must run `mojeek-login` and export the cookie as
+    `DSH_NETWORK_MOJEEK_COOKIE`. The user's stated trade-off is "first request
+    slow by 1-2 s, otherwise invisible".
+
+**The host never asks the user for that cookie**, so the settings dialog must
+NOT offer a key field for this engine: `ENGINE_HAS_API_KEY['mojeek-free']` is
+`false` (`dsh/client.settings.js`). A password box labelled "API Key" for an
+engine that has no key read as a missing paid subscription, and its row badge
+showed a permanent red "missing" that meant nothing. Declaring `auth` on the
+engine is still correct — it is how the CLI knows to inject `Cookie:` and to
+synthesize a 401 when a standalone run has none — but the DIALOG gate is a
+separate, deliberately-closed switch. A cookie that reaches the key map
+another way (hand-written config) still works and still self-heals.
+
+The solve itself is `mojeekLogin()` (`src/mojeek-login.ts`), separate
+from the search path. Both halves of that split are load-bearing:
+
+- **Three requests per search would walk into the second gate.** The Altcha
+  wall is only the first: a burst of ~6 cookie-authenticated queries gets the
+  egress IP answered with `403 automated queries` for minutes (measured), and
+  a paced 1 query / 8 s stream passes. The cached cookie makes a search ONE
+  GET; solving inline would make it three and spend the budget faster.
+- **The solver must use async PBKDF2.** The measured challenge is cheap
+  (~200–300 counters, ~1–2 s), but `pbkdf2Sync` in the host's long-lived
+  server would freeze `/health`, `/content` paging and every other tool call
+  for the duration. `mojeek-login.ts` fans counters across four libuv
+  workers instead.
+- **A 200 is not a success.** A stale/revoked cookie returns the JS challenge
+  page with **HTTP 200**, which parses to zero hits and reads as a genuine
+  empty answer. `MOJEEK_FREE_CHALLENGE_MARKER` is checked before the parser in
+  both `runSearch` (where the session invalidates and re-solves) and
+  `parseMany` (where the standalone path surfaces the warning). The 403
+  wall gets its own wording (the fix is patience, not a retry). The engine
+  itself never retries on its own.
+- **Registered LAST, never in the default chain.** Same rule as Brave, for one
+  more reason: a fresh install must not touch mojeek.com at all.
+
+### Per-engine options must reach the engine in SERVER mode too
+
+`DSH_NETWORK_ENGINE_OPTIONS` arrives two different ways: from `process.env` in
+a one-shot CLI run, and as a per-`/invoke` JSON body in the persistent server.
+`readEngineEnvOptions()` can only see the first — so an engine reading its own
+fields off `process.env` silently ignored every option typed into the settings
+dialog whenever the search came through dsh. `buildRequestOptions()`
+(`src/cli.ts`) is the fix: it spreads the engine's slice of
+`config.engineOptions` into the TOP level of the `buildRequests` options bag,
+where engines actually look (`buildBraveUrl` reads `opts.country`,
+`buildMojeekUrl` reads `opts.s`), and keeps the nested `engineOptions` key for
+engines that prefer it. The spread comes FIRST so the caller's own keys win —
+a free-form `perPage=…` line in the textarea must not outrank the result cap.
+
+### The browser half must not forget the new engine
+
+Adding an engine is never just `src/engines/<id>.ts`. The catalog lives in
+five more places, and a miss is silent (the dialog simply never offers the
+engine, or renders an empty label): `dsh/client.js` `ENGINES` +
+`ENGINE_LABELS` + both locale hints, `dsh/client.settings.js`
+`ENGINE_DEFAULT_ENDPOINTS` + `ENGINE_HAS_API_KEY` + `ENGINE_HINTS`,
+`dsh/schemas.js`'s chain description, `src/config.ts` `SEARCH_ENGINE_IDS`,
+and `tests/network.spec.ts`'s registry-order assertion.
+
 ### Per-engine options
 
 `DSH_NETWORK_ENGINE_OPTIONS` carries the settings dialog's free-form
 `key=value` textarea as `{ engineId: { … } }`; an engine reads its own slice
 with `readEngineEnvOptions(id)` (pure, never throws) and validates every
 field itself before it reaches a URL, so a typo cannot burn a billed call on
-a 422. `buildBraveUrl` is the reference: unknown keys and out-of-vocabulary
+a 422. That reader only sees `process.env`, so in server mode the SAME fields
+also arrive spread into the top level of the `buildRequests` options bag (see
+the section above) — an engine that reads only one of the two spellings works
+in one mode and silently ignores the dialog in the other.
+
+`buildBraveUrl` is the reference: unknown keys and out-of-vocabulary
 values are dropped, `count` comes from the call cap (`perPage`, clamped to
 Brave's 20) with `max` as the standalone fallback, and `extra_snippets=true`
 is always on so `page_age` / extra excerpts reach `published_at` and the
@@ -432,6 +519,7 @@ dsh-network         -X GET https://api.example.com/v1/users
 dsh-network download -u "https://example.com/logo.png" --dest tmp   # web_download
 dsh-network web_sitemap --query "github" --domain github.com
 dsh-network doctor                                     # no network
+dsh-network mojeek-login                               # Altcha PoW → chllg cookie (2 requests)
 dsh-network server   [--port <n>]                     # long-lived mode the host spawns
 ```
 

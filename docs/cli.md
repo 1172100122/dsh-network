@@ -15,6 +15,7 @@ dsh-network http | dsh-network -X <METHOD> <url>     Low-level HTTP request / ca
 dsh-network download -u <url>            [options]   Save a binary file to disk (web_download)
 dsh-network sitemap                       [options]   Curated portals lookup (web_sitemap)
 dsh-network doctor                                    Readiness report (no network)
+dsh-network mojeek-login                              Solve Mojeek's Altcha proof-of-work → chllg cookie
 dsh-network server                        [options]   Persistent loopback HTTP server
 ```
 
@@ -27,12 +28,31 @@ npx @naivg/dsh-network doctor
 ```
 
 Engine choices for `search`: `bing`, `duckduckgo`, `baidu`, `github`,
-`searxng`, `brave`. `--engine <id>` pins one; otherwise the chain runs in
-order. See [search-engines.md](search-engines.md).
+`searxng`, `brave`, `mojeek-free`. `--engine <id>` pins one; otherwise the chain
+runs in order. See [search-engines.md](search-engines.md).
 
 `doctor` is the readiness probe. It resolves the configuration and reports what
-it found — engine chain, timeouts, `apiKeys=[brave=no key]` — without
-contacting anything, which makes it safe offline and safe for a billed engine.
+it found — engine chain, timeouts,
+`apiKeys=[brave=no key mojeek-free=no key]` — without contacting anything,
+which makes it safe offline and safe for a billed engine.
+
+`mojeek-login` is the one command that talks to Mojeek without searching. It
+runs the Altcha challenge (`GET /captcha/challenge`), solves the proof-of-work
+with parallel PBKDF2 workers, posts the solution to `/captcha/verify` and
+prints the resulting `chllg=…` cookie in its JSON envelope:
+
+```json
+{"kind":"mojeek-login","status":"ok","cookie":"chllg=eyJvayI6…","expiresAt":"2026-11-11T11:43:40.000Z",
+ "counter":248,"solveMs":1750,"powAttempts":249}
+```
+
+Export `cookie` as `DSH_NETWORK_MOJEEK_COOKIE` for a standalone run. It costs
+two requests, no search quota, and the cookie lasts about a month. Inside dsh
+you never need it: the persistent server solves the same proof-of-work on the
+first search and caches the cookie, and the settings dialog offers no key
+field for the engine — see
+[search-engines.md](search-engines.md#mojeek-free) for the rate limits that
+come with it.
 
 ### Feeds
 

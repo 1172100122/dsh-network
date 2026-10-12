@@ -41,8 +41,8 @@ DeepSeek Harness 自带 `web_search` 和 `web_fetch`, 在模型撞上下面这�
 
 `dsh-network` 接管 `web` 插件缝, 把这两个工具换成一个常驻的 Node 进程:
 
-- **多搜索引擎**——默认按顺序尝试 Bing、DuckDuckGo、Baidu; GitHub、SearXNG
-  和 Brave 在你需要时再加入。
+- **多搜索引擎**——默认按顺序尝试 Bing、DuckDuckGo、Baidu; GitHub、SearXNG、
+  Brave 和 Mojeek 免费网页版在你需要时再加入。
 - **不再截断。** 超大的抓取与 HTTP 响应体会落入服务端缓存, 模型用 `cacheId`
   分页读取, 而不是丢掉尾部。
 - **五个工具**——搜索、抓取、裸的 `http_request`、精选站点查询
@@ -121,6 +121,7 @@ DeepSeek Harness 自带 `web_search` 和 `web_fetch`, 在模型撞上下面这�
 | `github` | token 可选 |
 | `searxng` | 无(受 endpoint 范围限制) |
 | `brave` | **需要密钥, 按量计费** |
+| `mojeek-free` | 无 —— 由插件自动完成 Altcha 验证 |
 
 更多细节见[搜索引擎](docs/search-engines.md)。
 

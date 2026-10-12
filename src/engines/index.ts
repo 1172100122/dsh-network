@@ -26,6 +26,20 @@ export { BaiduSearchEngine } from './baidu.ts'
 export { GitHubSearchEngine, routeGithubIndexes } from './github.ts'
 export { SearxngSearchEngine, SEARXNG_DEFAULT_ENDPOINT, SEARXNG_ENV, buildSearxngUrl, normalizeSearxngEndpoint } from './searxng.ts'
 export { BraveSearchEngine, BRAVE_ENDPOINT, BRAVE_API_KEY_ENV, BRAVE_AUTH_HEADER, buildBraveUrl } from './brave.ts'
+export {
+  MojeekFreeSearchEngine,
+  MOJEEK_FREE_ENGINE_ID,
+  MOJEEK_FREE_ORIGIN,
+  MOJEEK_FREE_ENDPOINT,
+  MOJEEK_FREE_CHALLENGE_URL,
+  MOJEEK_FREE_VERIFY_URL,
+  MOJEEK_FREE_AUTH_HEADER,
+  MOJEEK_FREE_COOKIE_ENV,
+  MOJEEK_FREE_CHALLENGE_MARKER,
+  MOJEEK_FREE_RESULTS_PER_PAGE,
+  buildMojeekUrl,
+  parseMojeekResults,
+} from './mojeek-free.ts'
 // web_sitemap is the curated portal catalog used by the LLM to pick
 // authoritative sources. It lives outside the engine registry (it is
 // pure data, not a search backend) so we only re-export it from here
@@ -39,13 +53,14 @@ import { BaiduSearchEngine } from './baidu.ts'
 import { GitHubSearchEngine } from './github.ts'
 import { SearxngSearchEngine } from './searxng.ts'
 import { BraveSearchEngine } from './brave.ts'
+import { MojeekFreeSearchEngine } from './mojeek-free.ts'
 
 /** The process-wide registry. Call `registerDefaultEngines` at startup. */
 export const defaultRegistry = new SearchEngineRegistry()
 
 /**
- * Register Bing, DuckDuckGo, Baidu, GitHub, SearXNG, and Brave as the
- * search chain.
+ * Register Bing, DuckDuckGo, Baidu, GitHub, SearXNG, Brave and Mojeek (free)
+ * as the search chain.
  *
  * Order matters: the chain runs engines in registration order, so the
  * most reliable one (Bing) goes first. GitHub sits near the tail — it is
@@ -58,8 +73,11 @@ export const defaultRegistry = new SearchEngineRegistry()
  * endpoint is itself private (see `engineAllowsPrivate` in cli.ts).
  * Brave is registered after it for the same reason plus one more: it is
  * billed per query (no free tier since Feb 2026), so it must never sit in
- * a default chain that could silently spend money. Users add or pin it
- * explicitly. Users can override the chain order via the
+ * a default chain that could silently spend money. `mojeek-free` is LAST of
+ * all: same opt-in rule, plus a credential the host solves by itself (the
+ * `chllg` cookie from an Altcha proof-of-work, see `src/mojeek-session.ts`)
+ * and an anti-automation gate that punishes bursts. Users add or pin them
+ * explicitly, and can override the chain order via the
  * `DSH_NETWORK_SEARCH_ENGINES` env var.
  */
 export function registerDefaultEngines(registry: SearchEngineRegistry = defaultRegistry): readonly SearchEngine[] {
@@ -70,6 +88,7 @@ export function registerDefaultEngines(registry: SearchEngineRegistry = defaultR
     new GitHubSearchEngine(),
     new SearxngSearchEngine(),
     new BraveSearchEngine(),
+    new MojeekFreeSearchEngine(),
   ]
   for (const e of engines) registry.register(e)
   return engines

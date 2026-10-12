@@ -85,6 +85,15 @@ export const FIREFOX_BAIDU: Readonly<Record<string, string>> = {
 } as const
 
 /**
+ * Mojeek overlay. 
+ * Mojeek is English-heavy, so here we override the Accept-Language to English.
+ */
+export const FIREFOX_MOJEEK: Readonly<Record<string, string>> = {
+  ...BROWSER_BASE,
+  'Accept-Language': 'en-US;q=0.9,en;q=0.9,*;q=0.6',
+} as const
+
+/**
  * Generic "browser-shaped" fetch profile used by the non-search
  * `web_fetch` tool. Mirrors the Firefox base so a default fetch looks
  * like a real browser navigation, which keeps static sites from

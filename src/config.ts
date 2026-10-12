@@ -8,6 +8,7 @@
  * without a restart; tool enablement is read once at apply().
  */
 import z from '@deepseek-ai/schemastery'
+import { normalizeEngineIds } from './engines/types.ts'
 
 export const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0'
@@ -21,7 +22,7 @@ export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'O
 export type HttpMethod = (typeof HTTP_METHODS)[number]
 
 export const DEFAULT_SEARCH_ENGINES = ['bing', 'duckduckgo', 'baidu'] as const
-export const SEARCH_ENGINE_IDS = new Set<string>(['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave'])
+export const SEARCH_ENGINE_IDS = new Set<string>(['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave', 'mojeek-free'])
 export const GITHUB_INDEX_IDS = new Set<string>(['repositories', 'code', 'issues', 'users'])
 export const GITHUB_SORTS = ['best', 'stars', 'updated'] as const
 
@@ -85,7 +86,8 @@ export function normalizeConfig(raw: unknown): Config {
   assertPositive('maxBodyChars', config.maxBodyChars)
   assertPositive('maxRedirects', config.maxRedirects)
   assertPositive('searchMaxResults', config.searchMaxResults)
-  for (const engine of config.searchEngines) {
+  const searchEngines = normalizeEngineIds(config.searchEngines)
+  for (const engine of searchEngines) {
     if (!SEARCH_ENGINE_IDS.has(engine)) {
       // Derived from the id set so the message can never drift from the
       // vocabulary that actually gates the field.
@@ -121,7 +123,7 @@ export function normalizeConfig(raw: unknown): Config {
     httpTimeoutMs: config.httpTimeoutMs,
     maxBodyChars: config.maxBodyChars,
     maxRedirects: config.maxRedirects,
-    searchEngines: config.searchEngines,
+    searchEngines,
     searchMaxResults: config.searchMaxResults,
     githubToken: config.githubToken,
     githubIndexes: [...githubIndexes],

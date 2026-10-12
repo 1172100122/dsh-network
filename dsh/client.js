@@ -41,8 +41,8 @@ window.__ModuleLoader__.load({
     var module = { exports: {} }
     var exports = module.exports
 
-    var ENGINES = ['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave']
-    var ENGINE_LABELS = { bing: 'Bing', duckduckgo: 'DuckDuckGo', baidu: 'Baidu', github: 'GitHub', searxng: 'SearXNG', brave: 'Brave Search' }
+    var ENGINES = ['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave', 'mojeek-free']
+    var ENGINE_LABELS = { bing: 'Bing', duckduckgo: 'DuckDuckGo', baidu: 'Baidu', github: 'GitHub', searxng: 'SearXNG', brave: 'Brave Search', 'mojeek-free': 'Mojeek (free web)' }
 
     // ───────────────────────── helpers (shared) ─────────────────────────
     /** Locale dictionaries; registered with the locale service so the
@@ -121,6 +121,7 @@ window.__ModuleLoader__.load({
         engineHintBaidu: '百度网页搜索（免密钥，中文结果更佳）。',
         searxngHint: '自托管元搜索引擎（JSON API）。Endpoint 默认 http://127.0.0.1:8888，可修改；实例的 settings.yml 必须在 search.formats 中启用 json，否则请求返回 403。仅本引擎自动放行回环地址，其余路径仍受 SSRF 防护约束。',
         braveHint: 'Brave 官方 Search API（需要 API Key；2026-02 起已取消免费额度，按查询计费）。密钥只存在本机，浏览器读不到。可选 options（每行 key=value）：country=DE、searchLang=de、uiLang=de-DE、freshness=pw、safesearch=moderate、goggles=https://…、offset=0-9。未配置密钥时不会发出任何请求。',
+        mojeekHint: 'Mojeek 自有索引的网页搜索（免费网页版）。常驻服务器会在第一次用到时自动完成 Altcha 验证（约 1-2 秒）。注意：Mojeek 每页 10 条、且只对英文查询有效；另外它会对突发查询返回 403（按 IP 冷却几分钟）。可选 options：s=11/21/… 取下一页。',
         userAgent: 'User-Agent',
         fetchTimeout: 'web_fetch 超时（毫秒）',
         searchTimeout: 'web_search 单引擎超时（毫秒）',
@@ -283,6 +284,7 @@ window.__ModuleLoader__.load({
         engineHintBaidu: 'Baidu web search (no key, best for Chinese).',
         searxngHint: 'Self-hosted metasearch via its JSON API. Endpoint defaults to http://127.0.0.1:8888 (editable); the instance must enable `json` in `search.formats` of its settings.yml or requests get a 403. Loopback access is granted for this engine only — SSRF guards stay on everywhere else.',
         braveHint: 'Brave Search API (needs an API key; the free tier was removed in Feb 2026, so every query is billed). The key stays on this machine and the browser never reads it back. Optional options (one key=value per line): country=DE, searchLang=de, uiLang=de-DE, freshness=pw, safesearch=moderate, goggles=https://…, offset=0-9. With no key configured no request is sent at all.',
+        mojeekHint: 'Web search over Mojeek\'s own index — the free web SERP. The persistent server solves the Altcha proof-of-work on first use (~1-2 s). Caveats: Mojeek serves 10 results per page and only answers English-heavy queries, and a burst of queries earns a 403 wall on the egress IP for a few minutes. Option: s=11/21/… for the next page.',
         userAgent: 'User-Agent',
         fetchTimeout: 'web_fetch timeout (ms)',
         searchTimeout: 'web_search per-engine timeout (ms)',

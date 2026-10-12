@@ -8,7 +8,7 @@ the fields that shape search as a whole. For the rest of the settings see
 
 ## The chain
 
-Six engines ship with the plugin. The chain is tried **in order**, and the
+Seven engines ship with the plugin. The chain is tried **in order**, and the
 first engine that returns hits wins:
 
 | Engine id | Source | Default chain | Credential |
@@ -19,11 +19,18 @@ first engine that returns hits wins:
 | `github` | hybrid REST `/search/{index}`, RRF-fused | opt-in | token optional |
 | `searxng` | self-hosted SearXNG JSON API | opt-in | none (endpoint-scoped) |
 | `brave` | Brave Search JSON API | opt-in | **keyed, billed** |
+| `mojeek-free` | HTML scrape of `www.mojeek.com/search` | opt-in | none |
 
-The three scrapers are always reachable; the other three need something to be
-worth adding — a token, a self-hosted instance, or a subscription — so they are
-never enabled behind your back. Default chain order is
+The three scrapers are always reachable; the other four need something to be
+worth adding — a token, a hostname, a subscription, or an index of their own —
+so they are never enabled behind your back. Default chain order is
 `['bing', 'duckduckgo', 'baidu']`.
+
+> **The id is `mojeek-free`, not `mojeek`.** Mojeek also sells an official
+> Search API (`api.mojeek.com`, billed, real API key), and the bare product
+> name next to a field labelled *API Key* read like that paid product. The
+> engine here is the free, Altcha-authed web SERP — and it is the only id the
+> CLI, the settings dialog and `--engine` accept.
 
 A **pin** bypasses the chain and queries one engine directly:
 
@@ -54,8 +61,11 @@ Each engine row opens an **Edit** dialog with up to three parts:
 | Part | What it is |
 |---|---|
 | **Endpoint** | The engine's base URL. Locked for the built-ins that have a fixed endpoint; editable for SearXNG. |
-| **API Key** | The engine credential, where it needs one. Write-only: the host stores it, the browser only ever reads back `hasApiKey`, and saving with the field empty keeps the key you already stored. |
+| **API Key** | The engine credential, **where the engine has one to give** — `brave` and nothing else. Write-only: the host stores it, the browser only ever reads back `hasApiKey`, and saving with the field empty keeps the key you already stored. |
 | **Custom options** | Free-form parameters, one `key=value` per line, appended to the request. |
+
+An engine with no key to configure has no **API Key** field at all — not a
+disabled one, and not a "missing" badge on its chain row.
 
 Custom options are validated by the engine *before* the request is built: an
 unknown key or an out-of-vocabulary value is dropped, so a typo can never burn
@@ -146,6 +156,81 @@ Check the credential state without spending anything:
 `npx @naivg/dsh-network doctor` prints `apiKeys=[brave=no key]`, and probing the
 endpoint with no credential is free too.
 
+## Mojeek (free)
+
+Mojeek runs its own crawler and its own index — the only independent index in
+this chain besides GitHub. It is reached through its **HTML** search page, and
+the page is behind an [Altcha](https://altcha.org/) proof-of-work.
+
+This is **not** Mojeek's official Search API — that is a separate, billed
+product this plugin has not implemented.
+
+The engine therefore does **not** solve the challenge while searching. There
+are two ways to get the cookie:
+
+### Inside the persistent server (the default)
+
+The server creates one `MojeekSession` (`src/mojeek-session.ts`) at startup
+and threads it onto every search. The first time `mojeek-free` lands in a
+chain, the session lazy-solves Altcha, caches the `chllg` cookie for ~30 days,
+and returns it. On a hit with a stale cookie, the session invalidates and
+re-solves inside the same search — the user never sees a stale-cookie
+warning. Cost: one ~1-2 s Altcha solve on the first search after a fresh
+install, and again only when Mojeek revokes the cookie (rare). The
+`dsh-network mojeek-login` verb is not needed, and the settings dialog shows
+**no** key field for this engine: the cookie is the server's to manage, so
+there is nothing to paste and nothing to nag about.
+
+### Outside the persistent server (single-shot CLI)
+
+Standalone `dsh-network search` does not carry a `MojeekSession`, so the auto
+path does not fire there. The login is a separate, explicit step:
+
+1. Run the solver on the CLI:
+
+   ```bash
+   npx @naivg/dsh-network mojeek-login
+   ```
+
+   It fetches `/captcha/challenge`, brute-forces the published key prefix with
+   parallel PBKDF2 workers (measured: ~1–2 s, counter lands around 200–300),
+   posts the solution to `/captcha/verify` and prints the `chllg=…` cookie
+   plus its expiry.
+
+2. Export it for the run:
+
+   ```bash
+   export DSH_NETWORK_MOJEEK_COOKIE='chllg=…'
+   ```
+
+   A host that would rather store it can put the same string in
+   `searchEngineApiKeys["mojeek-free"]` in `~/.dsh/dsh-network.json`; it wins
+   over the session's cookie and is re-solved automatically if it goes stale.
+
+3. The cookie lasts ~30 days. When it lapses — or when Mojeek revokes it — the
+   search page comes back and the engine says so (`the verification page came
+   back instead of results — the chllg cookie is stale`), which means
+   *run `mojeek-login` again*.
+
+Three limits are worth knowing before you put it in the chain:
+
+- **It is rate-gated by IP, on top of the challenge.** A burst of about six
+  cookie-authenticated queries gets the whole egress IP answered with
+  `403 Sorry your network appears to be sending automated queries`; the wall
+  lifted after ~3.5 minutes of silence in testing, and a paced 1 query / 8 s
+  stream passed. The engine reports the 403 as a warning and never retries, so
+  the chain falls through — but the block is on the *network*, not just on this
+  plugin, so it can also affect the same Mojeek in your browser. Keep it at the
+  tail of the chain (`searchEngines`), not at the head.
+- **English-heavy index.** A Chinese query (`深度学习`, `中文网站`) returns
+  200 with no result list at all. Baidu is the engine that answers those.
+- **10 results per page.** The engine fetches one page and says so in
+  `uncertainty` when you asked for more; option `s=11` / `s=21` fetches the
+  next page (one extra request, so page deliberately instead of polling).
+
+Optionally set `options` (one `key=value` per line): `s=<1-based start index>`
+for paging. Everything else is dropped before it reaches the host.
+
 ## Credentials
 
 Engine credentials live in `~/.dsh/dsh-network.json`, next to the rest of the
@@ -158,6 +243,9 @@ settings, and the browser only ever reads back *whether* a key is set:
   engine will send its auth header.
 - **Resolution order** (CLI side): the host's per-engine key map →
   the engine's own single-engine variable → the legacy GitHub token channel.
+  `mojeek-free`'s "key" is the `chllg` cookie and rides the same chain, but
+  the persistent server fills it in first from its session, so the host
+  normally has nothing stored.
 
 Without a usable credential the CLI sends **no request at all** for a keyed
 engine: it synthesizes an auth failure so "no credential" and "rejected
@@ -170,7 +258,7 @@ These fields shape the whole chain. See
 
 | Field | Meaning | Default |
 |---|---|---|
-| `searchEngines` | Ordered engine chain. | `['bing','duckduckgo','baidu']` |
+| `searchEngines` | Ordered engine chain. Ids are trimmed and lowercased on load, duplicates dropped. | `['bing','duckduckgo','baidu']` |
 | `searchMaxResults` | Result cap handed to engines (hard cap 20). | `10` |
 | `searchTimeoutMs` | Per-engine search timeout. | `15000` |
 | `searchEngineConfigs` | Per-engine rows: endpoint, `hasApiKey` (a derived view), options. | `{}` |
@@ -181,10 +269,11 @@ These fields shape the whole chain. See
 
 For headless and CLI runs the equivalents are `DSH_NETWORK_SEARXNG_URL`,
 `DSH_NETWORK_GITHUB_TOKEN` (legacy channel, still honored),
-`DSH_NETWORK_BRAVE_API_KEY` (single-engine runs), and the two maps the host
-packs into every call — `DSH_NETWORK_SEARCH_ENGINE_API_KEYS` and
-`DSH_NETWORK_ENGINE_OPTIONS`. They are JSON maps and are not meant to be set by
-hand; see [configuration.md](configuration.md#environment-variables).
+`DSH_NETWORK_BRAVE_API_KEY` and `DSH_NETWORK_MOJEEK_COOKIE` (single-engine
+runs), and the two maps the host packs into every call —
+`DSH_NETWORK_SEARCH_ENGINE_API_KEYS` and `DSH_NETWORK_ENGINE_OPTIONS`. The maps
+are JSON and are not meant to be set by hand; see
+[configuration.md](configuration.md#environment-variables).
 
 ---
 

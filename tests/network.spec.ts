@@ -575,7 +575,7 @@ describe('GitHubSearchEngine', () => {
   it('is registered in the default registry as chain tail', () => {
     registerDefaultEngines(defaultRegistry)
     const all = defaultRegistry.all().map((e) => e.id)
-    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave'])
+    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave', 'mojeek-free'])
   })
 })
 

@@ -39,6 +39,34 @@ export interface SearchSource {
 }
 
 /**
+ * Normalize one engine id: trim + lowercase. Every id boundary goes through
+ * this — a registry id, a chain entry written by hand into a config file, a
+ * key-map key and a `--engine` flag all have to land on the same string, or
+ * the engine resolves under one spelling and silently not under another.
+ */
+export function normalizeEngineId(id: string): string {
+  return String(id ?? '').trim().toLowerCase()
+}
+
+/**
+ * Normalize a whole id list, dropping blanks and duplicates. Engine ids are
+ * case-insensitive at the boundary but exact in the registry, so
+ * `['bing', 'Bing']` would otherwise resolve to the SAME engine twice and
+ * fire two searches at a rate-limited host.
+ */
+export function normalizeEngineIds(ids: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of ids) {
+    const id = normalizeEngineId(raw)
+    if (id === '' || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/**
  * Env knobs the CLI reads for the keyed engines, paired with HOW the
  * credential rides on a request. Declaring it on the engine keeps the
  * per-provider quirk (Brave's `X-Subscription-Token` vs a Bearer token)
@@ -307,6 +335,9 @@ export function composeEngineUrl(endpoint: string, primaryKey: string, primaryVa
  * so a user can target `country=DE` / `freshness=pw` at one engine without
  * a schema change or a CLI restart. Pure, sync, never throws: a malformed
  * value degrades to "no options", exactly like an unset one.
+ *
+ * The id is normalized on BOTH sides of the lookup, so a hand-written
+ * `DSH_NETWORK_ENGINE_OPTIONS` finds its engine whatever case its key uses.
  */
 export function readEngineEnvOptions(
   engineId: string,
@@ -321,7 +352,9 @@ export function readEngineEnvOptions(
     return {}
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-  const perEngine = (parsed as Record<string, unknown>)[engineId]
+  const map = parsed as Record<string, unknown>
+  const target = normalizeEngineId(engineId)
+  const perEngine = map[target] ?? Object.entries(map).find(([key]) => normalizeEngineId(key) === target)?.[1]
   if (!perEngine || typeof perEngine !== 'object' || Array.isArray(perEngine)) return {}
   return perEngine as Record<string, unknown>
 }

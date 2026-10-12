@@ -9,6 +9,39 @@
  */
 import { GITHUB_INDEX_IDS, GITHUB_SORTS } from './schemas.js'
 
+/** One engine id, normalized (trim + lowercase). */
+function normalizeEngineId(id) {
+  return typeof id === 'string' ? id.trim().toLowerCase() : ''
+}
+
+/**
+ * Re-key an id → value map onto normalized engine ids, first spelling winning.
+ * A hand-written config (or an older UI) can carry `Bing` where the registry
+ * only knows `bing`; keeping both would show the engine twice in the dialog.
+ */
+function normalizeEngineMap(map) {
+  const out = {}
+  for (const [id, value] of Object.entries(map)) {
+    const key = normalizeEngineId(id)
+    if (key === '' || Object.prototype.hasOwnProperty.call(out, key)) continue
+    out[key] = value
+  }
+  return out
+}
+
+/** The chain, in order, normalized with duplicates dropped. */
+function normalizeEngineChain(ids) {
+  const out = []
+  const seen = new Set()
+  for (const raw of ids) {
+    const id = normalizeEngineId(raw)
+    if (id === '' || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
 function summarize(config) {
   // Build a JSON-safe view of the resolved config; never echo API keys —
   // only the `hasApiKey` boolean that the editor card needs to render its
@@ -283,24 +316,29 @@ function isTrustedRequest(req) {
 
 function defaultConfig(raw) {
   const c = (raw && typeof raw === 'object') ? raw : {}
-  const searchEngines = Array.isArray(c.searchEngines) && c.searchEngines.length > 0
-    ? c.searchEngines.filter((s) => typeof s === 'string')
-    : ['bing', 'duckduckgo', 'baidu']
-  const searchEngineConfigs = {}
-  if (c.searchEngineConfigs && typeof c.searchEngineConfigs === 'object') {
-    for (const id of Object.keys(c.searchEngineConfigs)) {
-      const entry = c.searchEngineConfigs[id]
-      if (!entry || typeof entry !== 'object') continue
-      searchEngineConfigs[id] = {
-        endpoint: typeof entry.endpoint === 'string' ? entry.endpoint : undefined,
-        hasApiKey: entry.hasApiKey === true,
-        options: entry.options && typeof entry.options === 'object' ? entry.options : {},
-      }
+  // Normalized on the way in: an id written by hand (or by an older UI) may
+  // not match the registry's spelling, and `resolve()` drops what it cannot
+  // find — silently shrinking the user's chain.
+  const searchEngines = normalizeEngineChain(
+    Array.isArray(c.searchEngines) && c.searchEngines.length > 0
+      ? c.searchEngines.filter((s) => typeof s === 'string')
+      : ['bing', 'duckduckgo', 'baidu'],
+  )
+  const searchEngineConfigs = normalizeEngineMap(
+    c.searchEngineConfigs && typeof c.searchEngineConfigs === 'object' ? c.searchEngineConfigs : {},
+  )
+  for (const id of Object.keys(searchEngineConfigs)) {
+    const entry = searchEngineConfigs[id]
+    if (!entry || typeof entry !== 'object') {
+      delete searchEngineConfigs[id]
+      continue
+    }
+    searchEngineConfigs[id] = {
+      endpoint: typeof entry.endpoint === 'string' ? entry.endpoint : undefined,
+      hasApiKey: entry.hasApiKey === true,
+      options: entry.options && typeof entry.options === 'object' ? entry.options : {},
     }
   }
-  // SearXNG is self-hosted, so its endpoint is part of the config surface
-  // (editable in the settings UI, injected into the CLI as
-  // DSH_NETWORK_SEARXNG_URL). Seed the loopback default so the UI shows it
   // SearXNG is self-hosted, so its endpoint is part of the config surface
   // (editable in the settings UI, injected into the CLI as
   // DSH_NETWORK_SEARXNG_URL). Seed the loopback default so the UI shows it
@@ -336,11 +374,13 @@ function defaultConfig(raw) {
     // Carried through from the seed (row config or the persisted snapshot):
     // the loopback route stores engine API keys here, and without this the
     // keys would be rebuilt as `{}` on every restart even though the rest of
-    // the config survived.
-    searchEngineApiKeys:
+    // the config survived. Re-keyed like everything else, so a key stored
+    // under `Brave` still reaches the engine registered as `brave`.
+    searchEngineApiKeys: normalizeEngineMap(
       c.searchEngineApiKeys && typeof c.searchEngineApiKeys === 'object'
-        ? { ...c.searchEngineApiKeys }
+        ? c.searchEngineApiKeys
         : {},
+    ),
     searchMaxResults: Number.isInteger(c.searchMaxResults) && c.searchMaxResults > 0 ? c.searchMaxResults : 10,
     githubToken: typeof c.githubToken === 'string' ? c.githubToken : '',
     githubIndexes: Array.isArray(c.githubIndexes)
