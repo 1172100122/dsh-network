@@ -371,6 +371,63 @@ describe('browser-half chunks render through the loader contract', () => {
     expect(html.length).toBeGreaterThan(4000)
   })
 
+  /**
+   * The engine catalog lives in SIX places and every one of the browser-side
+   * lookups is keyed by id, so a missing entry renders NOTHING rather than
+   * throwing: no row label, no hint, and — the expensive one — no API Key
+   * field for an engine whose key the user must paste. This pins the whole
+   * catalog against the entry's own `ENGINES` list so adding an engine and
+   * forgetting the dialog tables fails here instead of in a user's browser.
+   */
+  it('has a complete dialog catalog for every engine in ENGINES', async () => {
+    const { entry, chunks } = await createChunkLoader().load()
+    const settings = chunks['client.settings.js']
+    const t = labelsFrom(entry)
+    const engines = entry.ENGINES as string[]
+    const dialog = settings.EngineDialog as (props: Record<string, unknown>) => unknown
+    expect(engines.length).toBeGreaterThan(0)
+
+    // Ground truth for "this engine offers a key field". Pinned HERE, not read
+    // from the chunk, so dropping an entry from ENGINE_HAS_API_KEY fails.
+    const KEYED = new Set(['brave', 'mojeek', 'tavily'])
+
+    for (const id of engines) {
+      // `ENGINE_LABELS` must know the id, or the (locked) category field and
+      // the add-engine list both print the bare id.
+      expect(entry.ENGINE_LABELS[id], `ENGINE_LABELS is missing ${id}`).toBeTruthy()
+
+      const html = renderNode(dialog({
+        react, t,
+        value: { id, endpoint: '', hasApiKey: false, options: {} },
+        onChange: () => {}, onCancel: () => {}, onSave: () => {},
+        hasGithubToken: false,
+      }))
+      // The printed label, not the id — a missing ENGINE_LABELS entry falls
+      // back to the raw id and would still "contain" it.
+      expect(html, `${id}: dialog must print its ENGINE_LABELS name`)
+        .toContain(entry.ENGINE_LABELS[id] as string)
+
+      // The hint string is looked up through ENGINE_HINTS; a missing entry
+      // renders no hint at all (`hintKey ? … : null`).
+      const hinted = renderNode(dialog({
+        react, t,
+        value: { id, endpoint: '', hasApiKey: true, options: {} },
+        onChange: () => {}, onCancel: () => {}, onSave: () => {},
+        hasGithubToken: false,
+      }))
+      expect(hinted, `${id}: dialog must render its ENGINE_HINTS description`)
+        .toMatch(/engineHint|Hint|api[^<]{0,40}|搜索|API/i)
+
+      // …and the key field appears exactly for the keyed engines. Tested by
+      // the generic field's own LABEL, not by `type="password"`: GitHub's
+      // dialog legitimately carries a password input for its dedicated token
+      // (the `githubBlock`), so a type-based check would call github keyed.
+      const hasKeyField = html.includes(t.enginesEditApiKey)
+      expect(hasKeyField, `${id}: API Key field presence must match ENGINE_HAS_API_KEY`)
+        .toBe(KEYED.has(id))
+    }
+  })
+
   it('renders the loaded page, engine rows and both engine dialogs', async () => {
     const { entry, chunks } = await createChunkLoader().load()
     const settings = chunks['client.settings.js']

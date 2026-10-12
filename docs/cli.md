@@ -28,13 +28,15 @@ npx @naivg/dsh-network doctor
 ```
 
 Engine choices for `search`: `bing`, `duckduckgo`, `baidu`, `so360`, `github`,
-`searxng`, `brave`, `mojeek-free`. `--engine <id>` pins one; otherwise the chain
-runs in order. See [search-engines.md](search-engines.md).
+`searxng`, `brave`, `mojeek-free`, `mojeek`, `tavily`. `--engine <id>` pins one;
+otherwise the chain runs in order. See [search-engines.md](search-engines.md).
 
 `doctor` is the readiness probe. It resolves the configuration and reports what
 it found — engine chain, timeouts,
-`apiKeys=[brave=no key mojeek-free=no key]` — without contacting anything,
-which makes it safe offline and safe for a billed engine.
+`apiKeys=[brave=no key mojeek-free=no key mojeek=no key tavily=no key]` —
+without contacting anything, which makes it safe offline and safe for a billed
+engine. The key list is derived from every registered engine that declares an
+`auth` block, so a new engine shows up here without editing `doctor`.
 
 `mojeek-login` is the one command that talks to Mojeek without searching. It
 runs the Altcha challenge (`GET /captcha/challenge`), solves the proof-of-work

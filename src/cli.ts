@@ -454,8 +454,8 @@ function helpText(): string {
     '  --max-bytes       int        Byte cap for one download (default 100 MB; the transfer',
     '                                FAILS past the cap, it never truncates)',
     '',
-    'Engine choices for search: bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free, mojeek.',
-    'Default chain is the order given above; the five after the three default engines are opt-in.',
+    'Engine choices for search: bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free, mojeek, tavily.',
+    'Default chain is the order given above; the six after the three default engines are opt-in.',
     'GitHub engine: hybrid REST search (repositories/code/issues/users). Code search needs',
     '  DSH_NETWORK_GITHUB_TOKEN; anonymous search is limited to 10 req/min per IP.',
     '360搜索 engine (`so360`): keyless Chinese index at https://www.so.com/s. IP rate-limited — a burst',
@@ -488,6 +488,20 @@ function helpText(): string {
     '  rb=GB|rbb=10 (region boost), lb=EN|lbb=100 (language boost), lr=EN,FR (β language restrict),',
     '  safe=0|1, date=0|1 (include last-modified date as published_at), cdate=0|1, size=0|1,',
     '  site=mojeek.com, fi/.example.com (max 25), fe, tlen=0..127, dlen=0..511, datewr=0|100, qm (excluded words).',
+    'Tavily engine (`tavily`): Tavily Search API (https://docs.tavily.com/documentation/api-reference/endpoint/search).',
+    '  POST https://api.tavily.com/search with a JSON body; auth is `Authorization: Bearer <key>`.',
+    '  Bills 1 API credit per query at the default `search_depth=basic` (advanced = 2 credits).',
+    '  Tavily uniquely supports a KEYLESS mode (no key ⇒ `X-Tavily-Access-Mode: keyless`, rate-limited),',
+    '  so the engine stays reachable without a key — but the credential hop still feeds ',
+    '  DSH_NETWORK_SEARCH_ENGINE_API_KEYS.tavily (or DSH_NETWORK_TAVILY_API_KEY for a standalone run)',
+    '  to lift the limit.',
+    '  Optional `options` (settings UI; one key=value per line): search_depth=advanced|basic|fast|ultra-fast',
+    '  (default basic), topic=general|news|finance, time_range=day|week|month|year|d|w|m|y,',
+    '  include_answer=true|false|basic|advanced, include_raw_content=false|markdown|text,',
+    '  exclude_domains=ad.com,spam.com (comma-separated), include_favicon=true|false,',
+    '  country=<country name> (only if topic=general), language=en|fr|zh-cn (ISO 639-1 or English name),',
+    '  exact_match=true|false, safe_search=true|false. Unknown keys and out-of-vocabulary values',
+    '  are dropped before the request is built, so a typo can\'t burn a billed call on a 422.',
     'web_sitemap: curated table of authoritative portals (domain, description, category, priority,',
     '  searchUrl template). Helps the model skip generic search for known sources.',
   ].join('\n')
@@ -642,7 +656,22 @@ function authFor(engine: SearchEngine, key: string): {
   headers: Record<string, string>
   queryParam: { name: string; value: string } | null
 } {
-  if (!engine.auth || key === '') return { headers: {}, queryParam: null }
+  if (!engine.auth) return { headers: {}, queryParam: null }
+  if (key === '') {
+    // Keyless fallback: an `optional: true` engine that ships a
+    // `fallbackHeader` (Tavily's `X-Tavily-Access-Mode: keyless` is the only
+    // current instance) still gets a usable auth header when no key is
+    // configured. Without `fallbackHeader` we send an unauthenticated request
+    // — the engine stays reachable, just restricted to whatever its
+    // keyless tier accepts.
+    if (engine.auth.optional && engine.auth.fallbackHeader) {
+      return {
+        headers: { [engine.auth.fallbackHeader.name]: engine.auth.fallbackHeader.value },
+        queryParam: null,
+      }
+    }
+    return { headers: {}, queryParam: null }
+  }
   if (engine.auth.in === 'query') {
     return { headers: {}, queryParam: { name: engine.auth.queryName ?? 'api_key', value: key } }
   }
@@ -843,7 +872,10 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
       // A keyed engine with no key never reaches the network: the same
       // synthetic-401 path GitHub has always used for its token-gated code
       // index keeps the error classification on one code path.
-      const authBlocked = engine.auth !== undefined && !hasApiKey
+      // `optional: true` engines (Tavily's documented keyless mode is the
+      // current instance) bypass this gate — the request still ships, just
+      // with `authFor`'s `fallbackHeader` instead of a real credential.
+      const authBlocked = engine.auth !== undefined && !engine.auth.optional && !hasApiKey
       let headers: Record<string, string> = {
         ...engine.defaultHeaders,
         ...authHeadersFor(engine, apiKey),
@@ -866,6 +898,9 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
             try {
               const fetched = await runClientFetch({
                 url: req.url,
+                method: req.method,
+                body: req.body,
+                contentType: req.contentType,
                 timeoutMs: config.searchTimeoutMs,
                 maxBytes: config.maxBodyChars,
                 maxChars: config.maxBodyChars,
@@ -915,7 +950,11 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
               ...(flags.headers ?? {}),
             }
             const retryRequests = engine.buildRequests?.(query, buildRequestOptions(engine, max, hasApiKey, apiKey, config))
-            const retryAuthBlocked = engine.auth !== undefined && !hasApiKey
+            // Same gate as the outer authBlocked — see that comment for the
+            // optional-key rule. The retry path mirrors it so a re-solved
+            // Mojeek cookie wouldn't be the only reason Tavily's keyless path
+            // got to ignore its own credential gate.
+            const retryAuthBlocked = engine.auth !== undefined && !engine.auth.optional && !hasApiKey
             if (retryRequests && retryRequests.length > 0) {
               bodies = await Promise.all(
                 retryRequests.map(async (req): Promise<EngineBody> => {
@@ -925,6 +964,9 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
                   try {
                     const fetched = await runClientFetch({
                       url: req.url,
+                      method: req.method,
+                      body: req.body,
+                      contentType: req.contentType,
                       timeoutMs: config.searchTimeoutMs,
                       maxBytes: config.maxBodyChars,
                       maxChars: config.maxBodyChars,

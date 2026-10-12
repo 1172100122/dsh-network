@@ -58,6 +58,16 @@ export {
   buildMojeekApiUrl,
   parseMojeekApiResults,
 } from './mojeek.ts'
+export {
+  TavilySearchEngine,
+  TAVILY_ENGINE_ID,
+  TAVILY_ENDPOINT,
+  TAVILY_API_KEY_ENV,
+  TAVILY_AUTH_HEADER,
+  TAVILY_KEYLESS_HEADER,
+  buildTavilyRequest,
+  parseTavilyResults,
+} from './tavily.ts'
 // web_sitemap is the curated portal catalog used by the LLM to pick
 // authoritative sources. It lives outside the engine registry (it is
 // pure data, not a search backend) so we only re-export it from here
@@ -74,13 +84,14 @@ import { SearxngSearchEngine } from './searxng.ts'
 import { BraveSearchEngine } from './brave.ts'
 import { MojeekFreeSearchEngine } from './mojeek-free.ts'
 import { MojeekSearchEngine } from './mojeek.ts'
+import { TavilySearchEngine } from './tavily.ts'
 
 /** The process-wide registry. Call `registerDefaultEngines` at startup. */
 export const defaultRegistry = new SearchEngineRegistry()
 
 /**
  * Register Bing, DuckDuckGo, Baidu, 360搜索, GitHub, SearXNG, Brave,
- * Mojeek (free) and Mojeek (official Search API) as the search chain.
+ * Mojeek (free), Mojeek (official Search API) and Tavily as the search chain.
  *
  * The chain runs engines in registration order, so the most reliable (Bing)
  * goes first. Registration order is NOT the default chain — that is
@@ -90,6 +101,9 @@ export const defaultRegistry = new SearchEngineRegistry()
  * are different (a cookie for `mojeek-free`, an API key for `mojeek`), but
  * they share a host and so should sit at the chain tail for the same reason
  * a fresh install must not touch mojeek.com unless explicitly added.
+ *
+ * Tavily sits at the very tail: every query is billed and the keyless tier
+ * is rate-limited, so a fresh install must not hit api.tavily.com at all.
  *
  * Override the chain via `DSH_NETWORK_SEARCH_ENGINES` or the settings UI.
  */
@@ -104,6 +118,7 @@ export function registerDefaultEngines(registry: SearchEngineRegistry = defaultR
     new BraveSearchEngine(),
     new MojeekFreeSearchEngine(),
     new MojeekSearchEngine(),
+    new TavilySearchEngine(),
   ]
   for (const e of engines) registry.register(e)
   return engines

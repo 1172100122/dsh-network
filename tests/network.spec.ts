@@ -62,6 +62,15 @@ import {
   buildMojeekApiUrl,
   parseMojeekApiResults,
 } from '../src/engines/mojeek.ts'
+import {
+  TAVILY_API_KEY_ENV,
+  TAVILY_AUTH_HEADER,
+  TAVILY_ENGINE_ID,
+  TAVILY_KEYLESS_HEADER,
+  TavilySearchEngine,
+  buildTavilyRequest,
+  parseTavilyResults,
+} from '../src/engines/tavily.ts'
 import { cleanText, defaultRegistry, registerDefaultEngines } from '../src/engines/index.ts'
 import {
   SO360_ENGINE_ID,
@@ -595,7 +604,7 @@ describe('GitHubSearchEngine', () => {
   it('is registered in the default registry as chain tail', () => {
     registerDefaultEngines(defaultRegistry)
     const all = defaultRegistry.all().map((e) => e.id)
-    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek'])
+    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek', 'tavily'])
   })
 })
 
@@ -1438,6 +1447,278 @@ describe('MojeekSearchEngine', () => {
     const items = new MojeekSearchEngine().parse(body, 10)
     expect(items.length).toBe(1)
     expect(items[0]?.snippet).toBe('S')
+  })
+})
+
+describe('TavilySearchEngine', () => {
+  const savedOptions = process.env.DSH_NETWORK_ENGINE_OPTIONS
+  const savedKey = process.env[TAVILY_API_KEY_ENV]
+  beforeAll(() => {
+    delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    delete process.env[TAVILY_API_KEY_ENV]
+  })
+  afterAll(() => {
+    if (savedOptions === undefined) delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    else process.env.DSH_NETWORK_ENGINE_OPTIONS = savedOptions
+    if (savedKey === undefined) delete process.env[TAVILY_API_KEY_ENV]
+    else process.env[TAVILY_API_KEY_ENV] = savedKey
+  })
+
+  it('declares the bearer credential and the documented keyless fallback header', () => {
+    // The two halves of Tavily's unique auth story: `auth.optional: true`
+    // bypasses the synthetic-401 gate (verified below), and `fallbackHeader`
+    // is what `authFor` sends when no key is configured. Wrong spelling on
+    // either would silently rate-limit the user without explanation.
+    const engine = new TavilySearchEngine()
+    expect(engine.id).toBe(TAVILY_ENGINE_ID)
+    expect(engine.displayName).toBe('Tavily Search')
+    expect(engine.endpoint).toBe('https://api.tavily.com/search')
+    expect(engine.auth?.header).toBe(TAVILY_AUTH_HEADER)
+    expect(engine.auth?.scheme).toBe('bearer')
+    expect(engine.auth?.apiKeyEnv).toBe(TAVILY_API_KEY_ENV)
+    expect(engine.auth?.optional).toBe(true)
+    expect(engine.auth?.fallbackHeader).toEqual({
+      name: TAVILY_KEYLESS_HEADER,
+      value: 'keyless',
+    })
+  })
+
+  it('buildRequests pins POST + JSON body + content-type, max_results clamped 1..20', () => {
+    const req = buildTavilyRequest('rust vs go', {})
+    expect(req?.method).toBe('POST')
+    expect(req?.url).toBe('https://api.tavily.com/search')
+    expect(req?.contentType).toBe('application/json')
+    const body = JSON.parse(String(req?.body))
+    expect(body.query).toBe('rust vs go')
+    // Default 10 when neither perPage nor max is supplied.
+    expect(body.max_results).toBe(10)
+    // The call's result cap (perPage) wins over the single-shot fallback.
+    const upper = buildTavilyRequest('q', { perPage: 25 })
+    expect(upper?.body && JSON.parse(upper.body).max_results).toBe(20)
+    const lower = buildTavilyRequest('q', { perPage: 0 })
+    expect(lower?.body && JSON.parse(lower.body).max_results).toBe(1)
+    // Standalone-CLI `max` spelling maps to the same field.
+    const standalone = buildTavilyRequest('q', { max: 8 })
+    expect(standalone?.body && JSON.parse(standalone.body).max_results).toBe(8)
+  })
+
+  it('passes through only the documented option vocabulary', () => {
+    // Valid enum / numeric options survive; unknown keys and out-of-range
+    // values are dropped so a typo cannot burn a credit on a 422.
+    const req = buildTavilyRequest('vue 3', {
+      searchDepth: 'advanced',
+      topic: 'news',
+      timeRange: 'pw', // not in vocabulary → dropped
+      includeAnswer: 'basic',
+      includeRawContent: 'text', // not in vocabulary → dropped
+      excludeDomains: 'spam.com,ads.com',
+      includeFavicon: true,
+      exactMatch: true,
+      safeSearch: false,
+      includeImages: true,
+      includeImageDescriptions: true,
+      chunksPerSource: 4, // out of range → dropped
+      country: 'Germany',
+      language: 'en',
+      includeDomains: 'docs.example.com',
+      includeDomainsMode: 'prefer',
+      startDate: '2026-01-01',
+      endDate: '2026-12-31',
+      bogus: 'unknown key',
+    })
+    const body = JSON.parse(String(req?.body))
+    // `timeRange: 'pw'` and `chunksPerSource: 4` and `includeRawContent: 'text'` are out of vocab.
+    expect(body.search_depth).toBe('advanced')
+    expect(body.topic).toBe('news')
+    expect(body.time_range).toBeUndefined()
+    expect(body.include_answer).toBe('basic')
+    expect(body.include_raw_content).toBeUndefined()
+    expect(body.exclude_domains).toEqual(['spam.com', 'ads.com'])
+    expect(body.include_domains).toEqual(['docs.example.com'])
+    expect(body.include_domains_mode).toBe('prefer')
+    expect(body.include_favicon).toBe(true)
+    expect(body.exact_match).toBe(true)
+    expect(body.safe_search).toBe(false)
+    expect(body.include_images).toBe(true)
+    expect(body.include_image_descriptions).toBe(true)
+    expect(body.chunks_per_source).toBeUndefined()
+    expect(body.country).toBe('germany')
+    expect(body.language).toBe('en')
+    expect(body).not.toHaveProperty('bogus')
+    expect(body).not.toHaveProperty('start_date')
+  })
+
+  it('include_domains_mode is only emitted alongside an include_domains list', () => {
+    // Tavily answers 400 for `include_domains_mode` on its own, and a
+    // 400 on a billed engine is exactly what the option gate exists to
+    // prevent. The mode is therefore subordinate to the list.
+    const modeAlone = JSON.parse(String(buildTavilyRequest('q', { includeDomainsMode: 'prefer' })?.body))
+    expect(modeAlone).not.toHaveProperty('include_domains_mode')
+    expect(modeAlone).not.toHaveProperty('include_domains')
+    // An invalid list (empty after trim) must not resurrect the mode.
+    const emptyList = JSON.parse(String(buildTavilyRequest('q', { includeDomains: ' , ', includeDomainsMode: 'prefer' })?.body))
+    expect(emptyList).not.toHaveProperty('include_domains')
+    expect(emptyList).not.toHaveProperty('include_domains_mode')
+  })
+
+  it('include_image_descriptions is gated on include_images', () => {
+    // Upstream renders descriptions INSIDE each image entry, so the flag
+    // alone does nothing. Dropping it keeps the recorded request honest
+    // about what the billed call actually used.
+    const withoutImages = JSON.parse(String(buildTavilyRequest('q', { includeImageDescriptions: true })?.body))
+    expect(withoutImages).not.toHaveProperty('include_image_descriptions')
+    const withImages = JSON.parse(String(buildTavilyRequest('q', { includeImages: true, includeImageDescriptions: true })?.body))
+    expect(withImages.include_image_descriptions).toBe(true)
+    // An explicit `includeImages=false` is still an explicit value, and the
+    // gate reads `=== true`, so the description is dropped with it.
+    const imagesOff = JSON.parse(String(buildTavilyRequest('q', { includeImages: false, includeImageDescriptions: true })?.body))
+    expect(imagesOff.include_images).toBe(false)
+    expect(imagesOff).not.toHaveProperty('include_image_descriptions')
+  })
+
+  it('country is locked to the OpenAPI enum; language has a permissive shape check', () => {
+    const bad = buildTavilyRequest('q', { country: 'Middle-earth' })
+    expect(JSON.parse(String(bad?.body))).not.toHaveProperty('country')
+    const good = buildTavilyRequest('q', { country: 'united states' })
+    expect(JSON.parse(String(good?.body)).country).toBe('united states')
+    // Language must be a short token; a stray newline wouldn't work.
+    const broken = buildTavilyRequest('q', { language: 'en\nUS' })
+    expect(JSON.parse(String(broken?.body))).not.toHaveProperty('language')
+  })
+
+  it('parseTavilyResults: happy path with published_date round-trips', () => {
+    const body = JSON.stringify({
+      query: 'rust vs go',
+      results: [
+        {
+          url: 'https://a.example/1',
+          title: 'Rust vs Go benchmarks',
+          content: 'A comparison of Rust and Go performance.',
+          score: 0.81,
+          published_date: 'Tue, 11 Mar 2025 17:00:00 GMT',
+        },
+        {
+          url: 'https://b.example/2',
+          title: 'Go is fine',
+          content: 'Notes.',
+        },
+      ],
+      response_time: 1.67,
+    })
+    const items = parseTavilyResults(body, 10)
+    expect(items.length).toBe(2)
+    expect(items[0]?.published_at).toBe('Tue, 11 Mar 2025 17:00:00 GMT')
+    expect(items[0]?.snippet).toContain('Rust and Go performance')
+    expect(items[1]?.published_at).toBeUndefined()
+  })
+
+  it('parseTavilyResults: bad URLs / relative URLs / missing titles degrade silently', () => {
+    const body = JSON.stringify({
+      results: [
+        { url: '/relative', title: 'Bad URL' },
+        { url: '', title: 'Missing URL' },
+        { url: 'https://a.example/1', title: '' },
+        { url: 'https://a.example/1', title: 'Duplicate' },
+      ],
+    })
+    const items = parseTavilyResults(body, 10)
+    expect(items.length).toBe(1) // only the absolute-URL + dedup'd entry
+    expect(items[0]?.url).toBe('https://a.example/1')
+    expect(items[0]?.title).toBe('https://a.example/1')
+  })
+
+  it('parseTavilyResults: empty / non-JSON / shape-less bodies return []', () => {
+    expect(parseTavilyResults('', 10)).toEqual([])
+    expect(parseTavilyResults('not json', 10)).toEqual([])
+    expect(parseTavilyResults(JSON.stringify({ results: [] }), 10)).toEqual([])
+    // A `{}` body with no `results` array returns [].
+    expect(parseTavilyResults(JSON.stringify({ query: 'x' }), 10)).toEqual([])
+  })
+
+  it('parseMany: a 401 / 403 surfaces the credential fix and names the env var', () => {
+    const engine = new TavilySearchEngine()
+    const auth = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '{"detail":{"error":"missing api key"}}', status: 401, headers: {} }], 10)
+    expect(auth.warnings?.[0]).toContain('authentication failed')
+    expect(auth.warnings?.[0]).toContain(TAVILY_API_KEY_ENV)
+    expect(auth.warnings?.[0]).toContain('keyless mode')
+    const forbidden = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 403, headers: {} }], 10)
+    expect(forbidden.warnings?.[0]).toContain('authentication failed')
+  })
+
+  it('parseMany: 422 distinguishes auth-shaped rejection from query rejection', () => {
+    // Tavily answers 422 for both auth-shape problems and query-validation
+    // problems; the body sniff is what separates them so the wrong
+    // suggestion is never printed.
+    const engine = new TavilySearchEngine()
+    const authBody = JSON.stringify({ detail: [{ loc: ['body', 'api_key'], msg: 'missing api key' }] })
+    const authSniff = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: authBody, status: 422, headers: {} }], 10)
+    expect(authSniff.warnings?.[0]).toContain('authentication')
+    const query = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '{"detail":[{"msg":"invalid search_depth"}]}', status: 422, headers: {} }], 10)
+    expect(query.warnings?.[0]).toContain('query rejected')
+    expect(query.warnings?.[0]).not.toContain('network → 搜索引擎')
+  })
+
+  it('parseMany: 429 / 432 / 433 each land in their own bucket', () => {
+    const engine = new TavilySearchEngine()
+    const limited = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 429, headers: {} }], 10)
+    expect(limited.warnings?.[0]).toContain('rate limited')
+    expect(limited.warnings?.[0]).toContain('keyless')
+    const plan = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 432, headers: {} }], 10)
+    expect(plan.warnings?.[0]).toContain('plan / key limit')
+    const paygo = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 433, headers: {} }], 10)
+    expect(paygo.warnings?.[0]).toContain('pay-as-you-go limit')
+  })
+
+  it('parseMany: a non-JSON 200 body is reported, not parsed as zero hits', () => {
+    // Two-body race: 200 with a wrong-shape body still classifies as an
+    // unexpected response, never a silent zero. The chain falls through,
+    // and the user gets the actionable warning rather than a confusing
+    // "no results" line.
+    const engine = new TavilySearchEngine()
+    const res = engine.parseMany(
+      [{ key: TAVILY_ENGINE_ID, body: '<html>unexpected</html>', status: 200, headers: {} }],
+      10,
+    )
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('not JSON')
+  })
+
+  it('parseMany: a slow response_time surfaces an uncertainty hint', () => {
+    const body = JSON.stringify({
+      query: 'q',
+      results: [{ url: 'https://a.example/1', title: 'T' }],
+      response_time: 31.4,
+    })
+    const res = new TavilySearchEngine().parseMany(
+      [{ key: TAVILY_ENGINE_ID, body, status: 200, headers: {} }],
+      10,
+    )
+    expect(res.uncertainty?.[0]).toContain('31.4s')
+  })
+
+  it('parseMany: transport failure lands in warnings, items stay empty', () => {
+    const res = new TavilySearchEngine().parseMany(
+      [{ key: TAVILY_ENGINE_ID, body: '', status: 0, error: 'getaddrinfo ENOTFOUND api.tavily.com' }],
+      10,
+    )
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('ENOTFOUND')
+  })
+
+  it('parse: single-body compatibility path mirrors parseMany', () => {
+    const body = JSON.stringify({
+      results: [{ url: 'https://a.example/1', title: 'T', content: 'S' }],
+    })
+    const items = new TavilySearchEngine().parse(body, 10)
+    expect(items.length).toBe(1)
+    expect(items[0]?.snippet).toBe('S')
+  })
+
+  it('buildRequests returns [] on an empty query (no POST issued)', () => {
+    // The auth-blocked gate in cli.ts would catch this downstream, but the
+    // engine itself is supposed to short-circuit before the wire.
+    expect(buildTavilyRequest('')).toBeNull()
+    expect(buildTavilyRequest('   ')).toBeNull()
   })
 })
 

@@ -115,6 +115,32 @@ export interface EngineAuth {
    * by hand, so `dsh-network search --engine brave` works standalone.
    */
   readonly apiKeyEnv: string
+  /**
+   * When true, a missing key is NOT a fatal gate for this engine — the CLI
+   * still sends the request, just with `fallbackHeader` instead of the real
+   * auth header. Tavily's documented keyless Search mode is the only current
+   * instance: rate-limited but functional, so the engine degrades gracefully
+   * instead of returning synthetic 401s.
+   *
+   * Optional-key engines never go through the "no credential" short-circuit
+   * (`authBlocked` in `runSearch`), and `authFor` returns `fallbackHeader`
+   * when the key is empty. With `optional: true` but no `fallbackHeader` set,
+   * the request ships without authentication — the engine is still allowed to
+   * be reached, it just isn't authorized to do anything useful. Default false
+   * preserves Brave's behavior on every existing path.
+   */
+  readonly optional?: boolean
+  /**
+   * Header to inject when the key is missing AND `optional: true`. The shape
+   * is a static `{ name, value }` pair — not a template, not a function —
+   * because the value is always a constant the engine knows (e.g. `keyless`).
+   * If the engine needs a keyless header that depends on the call, drop
+   * `optional` and emit the header itself through `buildRequests()` instead.
+   */
+  readonly fallbackHeader?: {
+    readonly name: string
+    readonly value: string
+  }
 }
 
 /**
@@ -127,6 +153,17 @@ export interface EngineRequest {
   key: string
   /** Absolute URL to fetch. */
   url: string
+  /** HTTP method (defaults to `GET`). POST is the only known non-GET form
+   *  today — Tavily's `/search` is JSON-over-POST. */
+  method?: string
+  /** Request body (text, JSON-stringified). When set, `runClientFetch`
+   *  POSTs the bytes at `runClientFetch` time. Empty string is treated as
+   *  "no body" (the engine omits the field entirely). */
+  body?: string
+  /** Content-Type override. When absent the CLI infers one (and the
+   *  default Accept stays on the headers). The engine layer fills JSON
+   *  shapes by writing `application/json` itself. */
+  contentType?: string
   /** Optional per-request header overrides (merged over defaultHeaders). */
   headers?: Record<string, string>
   /**

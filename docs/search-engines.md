@@ -8,7 +8,7 @@ the fields that shape search as a whole. For the rest of the settings see
 
 ## The chain
 
-Nine engines ship with the plugin. The chain is tried **in order**, and the
+Ten engines ship with the plugin. The chain is tried **in order**, and the
 first engine that returns hits wins:
 
 | Engine id | Source | Default chain | Credential |
@@ -22,8 +22,9 @@ first engine that returns hits wins:
 | `brave` | Brave Search JSON API | opt-in | **keyed, billed** |
 | `mojeek-free` | HTML scrape of `www.mojeek.com/search` (personal study purposes) | opt-in | none |
 | `mojeek` | Mojeek official Search API (`fmt=json`) | opt-in | **keyed, billed** |
+| `tavily` | Tavily Search JSON API (`POST /search`) | opt-in | keyed (billed; keyless fallback) |
 
-The three scrapers are always reachable; the other six need something to be
+The three scrapers are always reachable; the other seven need something to be
 worth adding — a token, a hostname, a subscription, an index of their own, or
 an IP budget you are willing to spend — so they are never enabled behind your
 back. Default chain order is `['bing', 'duckduckgo', 'baidu']`.
@@ -33,6 +34,13 @@ back. Default chain order is `['bing', 'duckduckgo', 'baidu']`.
 > official billed Search API (`fmt=json`, `?api_key=…`). The id is the
 > product, not the host: each chain row points at one engine and the engine
 > decides what kind of answer to expect.
+>
+> **`tavily` is the only engine that ALSO ships a documented keyless mode.**
+> Tavily's `/search` answers `X-Tavily-Access-Mode: keyless` with a
+> rate-limited free tier, while `Authorization: Bearer <key>` removes the
+> throttle. The credential hop still treats the key as write-only, but the
+> engine never short-circuits on a missing key — the fallback header is the
+> load-bearing half.
 
 A **pin** bypasses the chain and queries one engine directly:
 
@@ -313,6 +321,45 @@ Everything else is documented below.
 Unknown keys and out-of-vocabulary values are dropped before the URL is
 composed, so a typo in the settings textarea burns **no** call.
 
+## Tavily
+
+The Tavily Search API — billed per query. 
+
+It is the only keyed engine that also supports a documented keyless mode (rate-limited).
+
+1. Add `tavily` to the chain (or pin it per call with `engine: "tavily"`).
+2. Paste the API key into the dialog's **API Key** field. Skipping
+   this step still works — the engine sends the keyless header and serves
+   whatever Tavily's free tier returns.
+3. Optionally add parameters:
+
+| Parameter | Accepted values | Effect |
+|---|---|---|
+| `searchDepth` | `advanced` `basic` `fast` `ultra-fast` | Result precision vs. latency trade-off. Default `basic`. |
+| `topic` | `general` `news` `finance` | Index category. Default `general`. `news` auto-enables `published_date`. |
+| `timeRange` | `day` `week` `month` `year` `d` `w` `m` `y` | Recency filter (publish / last-update date). |
+| `includeAnswer` | `true` `false` `basic` `advanced` | Include an LLM-generated answer alongside results. |
+| `includeRawContent` | `false` `markdown` | Include the cleaned HTML/markdown body per hit (text mode skipped on purpose). |
+| `excludeDomains` | comma-separated, ≤150 hosts | Drop results from these domains. |
+| `includeDomains` | comma-separated, ≤300 hosts | Restrict (or boost) results to these domains. |
+| `includeDomainsMode` | `restrict` `prefer` | How `includeDomains` applies. Only emitted alongside `includeDomains`. |
+| `country` | an English name from the OpenAPI country list | Boost results from one country. **Only valid when `topic=general`.** |
+| `language` | `en` `fr` `zh-cn` … (ISO 639-1 or English name) | Boost results in one language. |
+| `exactMatch` | `true` `false` | Force quoted-phrase matching inside the query. |
+| `safeSearch` | `true` `false` | Adult-content filter. |
+| `includeImages` | `true` `false` | Include query-related images. |
+| `includeImageDescriptions` | `true` `false` | Add a description per image. Only emitted when `includeImages=true`. |
+| `includeFavicon` | `true` `false` | Include favicon URL per hit. |
+| `chunksPerSource` | `1`-`3` (integer) | Chunks per result (basic / fast). |
+
+Unknown keys and out-of-vocabulary values are dropped before the body is
+built, so a typo in the settings textarea burns **no** call.
+
+`max_results` follows the call's result cap (max 20). `Tavily
+Search` and `Authentication verified` are the user's "ready" gate (a
+live `tvly search "..." --json` from the CLI; or, within dsh, a confirmed
+key in the dialog).
+
 ## Credentials
 
 Engine credentials live in `~/.dsh/dsh-network.json`, next to the rest of the
@@ -333,6 +380,13 @@ Without a usable credential the CLI sends **no request at all** for a keyed
 engine: it synthesizes an auth failure so "no credential" and "rejected
 credential" are reported on one code path instead of a mystery 401.
 
+**Tavily is the one exception.** Its `auth.optional` declaration makes the
+CLI fall back to `X-Tavily-Access-Mode: keyless` instead of short-circuiting,
+so a missing key still produces a request — the user's chain stays intact
+even without a Tavily account. The fallback's rate limit is documented and
+the engine surfaces the 429 it generates; nothing else in this plugin
+expects a request to ship without a credential.
+
 ## Engine-level settings
 
 These fields shape the whole chain. See
@@ -351,11 +405,12 @@ These fields shape the whole chain. See
 
 For headless and CLI runs the equivalents are `DSH_NETWORK_SEARXNG_URL`,
 `DSH_NETWORK_GITHUB_TOKEN` (legacy channel, still honored),
-`DSH_NETWORK_BRAVE_API_KEY` and `DSH_NETWORK_MOJEEK_COOKIE` (single-engine
-runs), and the two maps the host packs into every call —
-`DSH_NETWORK_SEARCH_ENGINE_API_KEYS` and `DSH_NETWORK_ENGINE_OPTIONS`. The maps
-are JSON and are not meant to be set by hand; see
-[configuration.md](configuration.md#environment-variables).
+`DSH_NETWORK_BRAVE_API_KEY`, `DSH_NETWORK_MOJEEK_COOKIE`, and
+`DSH_NETWORK_TAVILY_API_KEY` (single-engine runs), and the two maps the
+host packs into every call — `DSH_NETWORK_SEARCH_ENGINE_API_KEYS` and
+`DSH_NETWORK_ENGINE_OPTIONS`. The maps are JSON and are not meant to be
+set by hand; see [configuration.md](configuration.md#environment-variables).
+Tavily is also reachable without any of these (keyless mode).
 
 ---
 
