@@ -85,6 +85,18 @@ export const FIREFOX_BAIDU: Readonly<Record<string, string>> = {
 } as const
 
 /**
+ * 360搜索 (so.com) overlay. zh-CN first (Chinese-first index), `Host`
+ * pinned because so.com's reverse proxy occasionally 502s when the header
+ * is reconstructed from the URL alone.
+ */
+export const FIREFOX_SO360: Readonly<Record<string, string>> = {
+  ...BROWSER_BASE,
+  'Accept-Encoding': 'gzip, deflate',
+  Host: 'www.so.com',
+  'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,*;q=0.5',
+} as const
+
+/**
  * Mojeek overlay. 
  * Mojeek is English-heavy, so here we override the Accept-Language to English.
  */

@@ -27,7 +27,7 @@ spell out the scope — a bare `npx dsh-network` would fetch the wrong package:
 npx @naivg/dsh-network doctor
 ```
 
-Engine choices for `search`: `bing`, `duckduckgo`, `baidu`, `github`,
+Engine choices for `search`: `bing`, `duckduckgo`, `baidu`, `so360`, `github`,
 `searxng`, `brave`, `mojeek-free`. `--engine <id>` pins one; otherwise the chain
 runs in order. See [search-engines.md](search-engines.md).
 

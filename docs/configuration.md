@@ -115,6 +115,11 @@ used. Two further properties come with the gate:
 The default chain is **Bing → DuckDuckGo → Baidu**. Four more engines are
 available, all opt-in, and they need nothing beyond the fields above:
 
+- **360搜索 (`so360`)** — keyless Chinese index at `https://www.so.com/s`. No
+  credential to configure. It is opt-in because 360 rate-limits by source IP.
+  360 does not bind that to the request source. Also Chinese-index-first, and a
+  page yields only 5-7 organic hits. See
+  [search-engines.md](search-engines.md#360搜索-so360).
 - **GitHub** — hybrid REST search over repositories / code / issues / users,
   fused by RRF. Anonymous search is limited to 10 req/min per IP; a token
   raises the quota and enables the code index. Configure it in the

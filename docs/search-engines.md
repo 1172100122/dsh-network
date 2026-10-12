@@ -8,7 +8,7 @@ the fields that shape search as a whole. For the rest of the settings see
 
 ## The chain
 
-Seven engines ship with the plugin. The chain is tried **in order**, and the
+Eight engines ship with the plugin. The chain is tried **in order**, and the
 first engine that returns hits wins:
 
 | Engine id | Source | Default chain | Credential |
@@ -16,15 +16,16 @@ first engine that returns hits wins:
 | `bing` | HTML scrape of `www.bing.com/search` | ✅ #1 | none |
 | `duckduckgo` | HTML scrape of `html.duckduckgo.com/html` | ✅ #2 | none |
 | `baidu` | HTML scrape of `www.baidu.com/s` | ✅ #3 | none |
+| `so360` | HTML scrape of `www.so.com/s` | opt-in | none (IP rate limit) |
 | `github` | hybrid REST `/search/{index}`, RRF-fused | opt-in | token optional |
 | `searxng` | self-hosted SearXNG JSON API | opt-in | none (endpoint-scoped) |
 | `brave` | Brave Search JSON API | opt-in | **keyed, billed** |
 | `mojeek-free` | HTML scrape of `www.mojeek.com/search` | opt-in | none |
 
-The three scrapers are always reachable; the other four need something to be
-worth adding — a token, a hostname, a subscription, or an index of their own —
-so they are never enabled behind your back. Default chain order is
-`['bing', 'duckduckgo', 'baidu']`.
+The three scrapers are always reachable; the other five need something to be
+worth adding — a token, a hostname, a subscription, an index of their own, or
+an IP budget you are willing to spend — so they are never enabled behind your
+back. Default chain order is `['bing', 'duckduckgo', 'baidu']`.
 
 > **The id is `mojeek-free`, not `mojeek`.** Mojeek also sells an official
 > Search API (`api.mojeek.com`, billed, real API key), and the bare product
@@ -76,7 +77,41 @@ a call on a 422.
 `bing`, `duckduckgo`, and `baidu` have locked endpoints, take no options, and
 need no credential. Baidu remains the best of the three for Chinese-language
 queries; DuckDuckGo is the privacy-first fallback. They exist because a keyless
-chain is what makes the plugin work on a fresh install.
+chain is what makes the plugin work on a fresh install. `so360` is a fourth
+scraper of the same shape, but it is opt-in for the reason below.
+
+## 360搜索 (so360)
+
+A keyless Chinese index at `https://www.so.com/s` — no account, no API key, no
+proof-of-work. The first request from a cold address returns a full result
+page, and the real target URL is pre-rendered in each result's `data-mdurl`
+attribute, so the engine returns clean links instead of `so.com/link?m=…`
+redirects.
+
+It is **opt-in** because 360 rate-limits by source IP.
+
+### The rate limit, and how to clear it
+
+After a burst of unspaced requests, 360 answers with a **graphical CAPTCHA page
+— served with HTTP 200**, titled `访问异常页面` and roughly 6-9 KB.
+
+To clear it: **open `https://www.so.com` in a browser and complete the
+verification once.** The engine never retries, since a retry here extends the
+cooldown rather than clearing it.
+
+Two more things worth knowing before you put it in the chain:
+
+- **A page yields only 5-7 organic results, not ten.** 360 interleaves "mohe"
+  rich cards (AI 答案 / 图片 / 短视频 / 百科) that take up result slots without
+  being results, so the engine reports the displacement in `uncertainty` rather
+  than letting a low number read as "that's everything".
+- **The index is Chinese-first.** English queries do return hits, but they
+  skew Chinese. Baidu is the better default for mixed-language work; add 360
+  when you want a second Chinese opinion, not in place of Baidu.
+
+Optionally set `options` (one `key=value` per line): `pn=<page number>` for
+paging (`pn=2` is the next page). Everything else is dropped before it
+reaches the host.
 
 ## GitHub
 

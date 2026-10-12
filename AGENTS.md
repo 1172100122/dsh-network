@@ -52,7 +52,9 @@ only what you need to **change the code without breaking it**.
   single-shot CLI never loads.
 - **Undici + pinned dispatcher** for SSRF: every redirect hop is validated
   (URL parse → allowlist → DNS → private/reserved IP rejection) and pinned to
-  one IP for the socket. No shelling out to `curl.exe` / `nslookup.exe`.
+  one IP for the socket. No shelling out to `curl.exe` / `nslookup.exe`. The
+  dispatcher pins the TLS **cipher list** to Firefox's — not the TLS
+  **version**; see the invariant below.
 - **Documents via officeparser** (`src/document.ts`). `client.ts` recognises a
   fixed MIME allowlist (PDF, OOXML, ODF, EPUB) and returns raw bytes, which
   `fetch.ts` pipes through `officeparser`'s `ast.to('md')`. Loaded via
@@ -275,6 +277,37 @@ from the search path. Both halves of that split are load-bearing:
 - **Registered LAST, never in the default chain.** Same rule as Brave, for one
   more reason: a fresh install must not touch mojeek.com at all.
 
+### Pin the TLS CIPHERS, never the TLS VERSION
+
+`pinnedDispatcherLike` (`src/client.ts`) sets `minVersion: 'TLSv1.2'` plus
+`ciphers: FIREFOX_TLS12_CIPHERS` (Firefox's own preference order, the list
+curl-impersonate's `firefox` profile uses).
+
+- **The fingerprint is the cipher list, not the version.** The benefit is available
+  on TLS 1.2 too, through the list.
+- **The list must stay a SUPERSET of what mainstream servers offer.** An
+  over-tight list fails closed with `ERR_SSL_NO_CIPHER_MATCH`, which reads as
+  a network outage rather than a config error. The DHE suites are not
+  preferred by Firefox but are kept deliberately, so an RSA-only edge still
+  finds a shared suite.
+
+When adding an engine, check its edge can actually complete the handshake the
+dispatcher offers.
+
+### 360: a 200 can be a CAPTCHA wall, and only the user can clear it
+
+The engine id is **`so360`**, not `360` / `so-com`: 360's web SERP is the only
+360 product this plugin touches (no API, no billed key), so the id names the
+search engine by its product number the way `baidu` / `bing` name theirs.
+`src/engines/so360.ts`, `So360SearchEngine`, `SO360_*` constants,
+`buildSo360Url` / `parseSo360Results`; the display name is `360搜索`, since the
+bare product number reads as nothing to an English reader.
+
+360 needs **no credential and no proof-of-work** — the first request from a
+cold address returns a full SERP. It DOES have an IP rate limit, and the way
+it is enforced is the load-bearing part, the wall is HTTP 200 with a ~6-9 KB
+ `访问异常页面` body. Nothing here can re-solve it, and nothing should retry.
+
 ### Per-engine options must reach the engine in SERVER mode too
 
 `DSH_NETWORK_ENGINE_OPTIONS` arrives two different ways: from `process.env` in
@@ -285,9 +318,10 @@ dialog whenever the search came through dsh. `buildRequestOptions()`
 (`src/cli.ts`) is the fix: it spreads the engine's slice of
 `config.engineOptions` into the TOP level of the `buildRequests` options bag,
 where engines actually look (`buildBraveUrl` reads `opts.country`,
-`buildMojeekUrl` reads `opts.s`), and keeps the nested `engineOptions` key for
-engines that prefer it. The spread comes FIRST so the caller's own keys win —
-a free-form `perPage=…` line in the textarea must not outrank the result cap.
+`buildMojeekUrl` reads `opts.s`, `buildSo360Url` reads `opts.pn`), and keeps the
+nested `engineOptions` key for engines that prefer it. The spread comes FIRST so
+the caller's own keys win — a free-form `perPage=…` line in the textarea must not
+outrank the result cap.
 
 ### The browser half must not forget the new engine
 
@@ -378,6 +412,16 @@ Only fetch/http bodies are, so two identical searches in one turn bill the
 engine twice. Known and accepted: a search cache needs an explicit
 invalidation story, and a stale hit list is its own defect. Revisit only if a
 billed engine joins the DEFAULT chain.
+
+### `dsh-network doctor` cannot prove an engine is reachable
+
+`doctor` resolves config and reports credential state without contacting
+anything (it is safe offline and safe for a billed engine). That makes it blind
+to everything a search engine can get wrong on the wire — a TLS handshake the
+dispatcher refuses, a CAPTCHA wall, an HTML shape the parser missed. The only
+real check is a live `search --engine <id>`, which costs the host's budget on a
+billed engine. See the TLS invariant above: `baidu` reported healthy in `doctor`
+while being 100% unreachable.
 
 ### Browser half: chunks
 

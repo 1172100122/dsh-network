@@ -160,8 +160,9 @@ dsh-network/
 │   └── engines/                # registry + per-engine implementations
 │       ├── types.ts            # SearchEngine interface, registry, id normalization, options reader
 │       ├── header-profiles.ts  # Firefox-127 baseline + overlays
-│       ├── bing.ts / duckduckgo.ts / baidu.ts / github.ts / searxng.ts / brave.ts
+│       ├── bing.ts / duckduckgo.ts / baidu.ts / so360.ts / github.ts / searxng.ts / brave.ts
 │       ├── mojeek-free.ts      # HTML SERP + cookie credential + 403/challenge classification
+│       │                       # so360.ts: HTML SERP + the HTTP-200 CAPTCHA-wall classification
 │       └── index.ts            # barrel + registerDefaultEngines()
 ├── tests/                      # see "Test suite" above
 └── dist/                       # built artifacts (gitignored)

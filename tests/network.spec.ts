@@ -57,6 +57,14 @@ import {
 import { BRAVE_API_KEY_ENV, BraveSearchEngine, buildBraveUrl } from '../src/engines/brave.ts'
 import { cleanText, defaultRegistry, registerDefaultEngines } from '../src/engines/index.ts'
 import {
+  SO360_ENGINE_ID,
+  SO360_BLOCKED_MARKER,
+  So360SearchEngine,
+  buildSo360Url,
+  countSo360RichCards,
+  parseSo360Results,
+} from '../src/engines/so360.ts'
+import {
   WEB_SITEMAP,
   buildSearchUrl,
   categoriesInUse,
@@ -359,7 +367,7 @@ describe('search engines decode entities at the parser boundary', () => {
     expect(hit?.snippet).toBe('1 000·res')
   })
 
-  it('never emits a raw reference for any of the three scraped engines', () => {
+  it('never emits a raw reference for any of the scraped engines', () => {
     // The end-to-end assertion the bug report maps to: whatever shape the
     // markup takes, no `&...;` reaches the model or a card.
     const fragments = [
@@ -370,6 +378,11 @@ describe('search engines decode entities at the parser boundary', () => {
       ),
       parseBaiduResults(
         '<div class="c-container"><h3><a href="https://e.org/3">T&amp;T</a></h3><span class="c-abstract">a&nbsp;b</span></div>',
+        5,
+      ),
+      parseSo360Results(
+        '<li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=x" data-mdurl="https://e.org/4">T&amp;T</a></h3>' +
+          '<p class="res-desc">a&nbsp;b</p></li>',
         5,
       ),
     ]
@@ -575,7 +588,157 @@ describe('GitHubSearchEngine', () => {
   it('is registered in the default registry as chain tail', () => {
     registerDefaultEngines(defaultRegistry)
     const all = defaultRegistry.all().map((e) => e.id)
-    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave', 'mojeek-free'])
+    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free'])
+  })
+})
+
+// ─────────────────────────── so360 engine ────────────────────────────
+describe('So360SearchEngine', () => {
+  // Trimmed from the live 2026-10 SERP — keeps the shapes the parser
+  // keys on: heading attribute wobble, data-mdurl, both snippet layouts,
+  // rich-card containers, and the g-title heading the mohe cards use.
+  const SERP =
+    '<li class="res-list"><div id="mohe-360shoutiao_onlineAI" class="g-mohe ">' +
+    '<h3 class="g-title "><a href="https://image.so.com/i?q=x" data-md=\'{"p":"title"}\'>图片卡片</a></h3></div>' +
+    '<h3   class="res-title"><a href="https://www.so.com/link?m=aaa" data-mdurl="https://real.example/1"' +
+    " data-res='{\"tp\":21,\"pos\":1}' target=\"_blank\">大模型<em>推理</em>框架</a></h3>" +
+    '<p class="res-desc"><span class="gray g-c-gray">2024年10月11日&nbsp;-&nbsp;</span>加速推理&nbsp;的<em>用处</em></p>' +
+    '<p class="g-linkinfo"><cite><a class="g-linkinfo-a">real.example</a></cite></p></li>' +
+    '<li class="res-list"><h3 class="res-title " >' +
+    '<a  href="https://www.so.com/link?m=bbb" data-mdurl="https://real.example/2"  target="_blank">缩略图结果</a></h3>' +
+    '<div class="res-comm-con"><span class="res-list-summary">errorTS2345:Argumentof<em>type</em>&#039;Buffer&#039;' +
+    'is not assignable to parameter</span></div></li>' +
+    // `lianmeng-ad` is an empty JS-filled sidebar slot outside the flow;
+    // kept so a parser keyed on `<li>` nesting would trip over it.
+    '<div id="lm-rightbottom" class="lianmeng-ad"></div>' +
+    '<div class="g-mohe " data-mohe-type="360pic_new"><h3 class="g-title ">' +
+    '<a href="https://image.so.com/i?q=y" data-md=\'{"p":"title"}\'>图片卡片</a></h3></div>'
+
+  const engineOf = () => new So360SearchEngine()
+
+  it('composes the SERP URL and validates the only option, pn', () => {
+    expect(buildSo360Url('大模型')).toBe('https://www.so.com/s?q=%E5%A4%A7%E6%A8%A1%E5%9E%8B')
+    expect(buildSo360Url('x', { pn: 2 })).toBe('https://www.so.com/s?q=x&pn=2')
+    // Out-of-range, non-integer and unknown keys are dropped rather than
+    // forwarded: a typo in the settings textarea must not reach the host.
+    expect(buildSo360Url('x', { pn: 1 })).toBe('https://www.so.com/s?q=x')
+    expect(buildSo360Url('x', { pn: 101 })).toBe('https://www.so.com/s?q=x')
+    expect(buildSo360Url('x', { pn: 'two' })).toBe('https://www.so.com/s?q=x')
+    expect(buildSo360Url('x', { src: 'evil', foo: 1 })).toBe('https://www.so.com/s?q=x')
+  })
+
+  it('is keyless: no auth block, so the dialog never offers a key field', () => {
+    const e = engineOf()
+    expect(e.id).toBe(SO360_ENGINE_ID)
+    expect(e.endpoint).toBe('https://www.so.com/s')
+    expect(e.displayName).toBe('360搜索')
+    expect(e.auth).toBeUndefined()
+  })
+
+  it('prefers data-mdurl over the so.com/link redirect', () => {
+    const [first] = parseSo360Results(SERP, 10)
+    expect(first?.url).toBe('https://real.example/1')
+  })
+
+  it('falls back to href when a card carries no data-mdurl', () => {
+    const hits = parseSo360Results('<h3 class="res-title"><a href="https://fallback.example/9">T</a></h3>', 10)
+    expect(hits[0]?.url).toBe('https://fallback.example/9')
+  })
+
+  it('decodes entities and strips highlight markup in both snippet layouts', () => {
+    const [plain, thumbed] = parseSo360Results(SERP, 10)
+    expect(plain?.title).toBe('大模型推理框架')
+    // `&nbsp;-&nbsp;` around the date becomes ` - `; the `&nbsp;` before 的
+    // becomes a plain space (the whitespace pass runs even with no `&`).
+    expect(plain?.snippet).toBe('2024年10月11日 - 加速推理 的用处')
+    // The thumbnail layout is a `<span>`; a naive `([\s\S]*?)<\//` stops at
+    // the first `</em>` and shreds the snippet. The tempered matcher keeps it.
+    expect(thumbed?.snippet).toBe("errorTS2345:Argumentoftype'Buffer'is not assignable to parameter")
+  })
+
+  it('excludes rich cards, which carry g-title instead of res-title', () => {
+    const urls = parseSo360Results(SERP, 10).map((h) => h.url)
+    expect(urls).toEqual(['https://real.example/1', 'https://real.example/2'])
+    expect(urls.some((u) => u.includes('image.so.com'))).toBe(false)
+    expect(urls.some((u) => u.includes('ad.example'))).toBe(false)
+  })
+
+  it('decodes entity-escaped ampersands in data-mdurl', () => {
+    const [hit] = parseSo360Results(
+      '<h3 class="res-title"><a href="/l" data-mdurl="https://e.example/s?a=1&amp;src=n">T</a></h3>',
+      10,
+    )
+    expect(hit?.url).toBe('https://e.example/s?a=1&src=n')
+  })
+
+  it('counts the rich cards that displace organic results', () => {
+    expect(countSo360RichCards(SERP)).toBe(2)
+    expect(countSo360RichCards('<h3 class="res-title"><a href="https://e.org/1">T</a></h3>')).toBe(0)
+  })
+
+  describe('the anti-automation CAPTCHA (served with HTTP 200)', () => {
+    // The two marker strings (title + first line of body) come from the
+    // real block page; a parser that only looked for result headings would
+    // read this as "no results".
+    const BLOCKED =
+      '<!DOCTYPE html><html><head><title>访问异常页面</title></head><body>' +
+      '<div id="warper"><p class="warn">请输入验证码以便正常访问: 看不清，换一个</p>' +
+      '<p>您的IP是： 117.136.35.2</p></div></body></html>'
+
+    it('matches the marker on the block page and not on a real SERP', () => {
+      expect(SO360_BLOCKED_MARKER.test(BLOCKED)).toBe(true)
+      expect(SO360_BLOCKED_MARKER.test(SERP)).toBe(false)
+    })
+
+    it('reports the wall instead of parsing it as an empty index', () => {
+      // HTTP 200 + this body is NOT "360 found nothing".
+      const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: BLOCKED, status: 200, headers: {} }], 10)
+      expect(res.items).toEqual([])
+      const warning = res.warnings?.join('\n') ?? ''
+      expect(warning).toMatch(/CAPTCHA/)
+      // The remedy names the URL and the manual step — "wait and hope" strands
+      // the user on a failed search.
+      expect(warning).toContain('https://www.so.com')
+      expect(warning).toMatch(/browser/i)
+      expect(res.uncertainty).toBeUndefined()
+    })
+
+    it('never asserts an uncertainty on a blocked page', () => {
+      // An uncertainty note would tell the caller to fetch MORE pages off an
+      // IP that is already walled.
+      const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: BLOCKED, status: 200, headers: {} }], 10)
+      expect(res.uncertainty).toBeUndefined()
+    })
+
+    it('keeps the single-body path from mistaking it for an empty result set', () => {
+      expect(engineOf().parse(BLOCKED, 10)).toEqual([])
+    })
+
+    it('classifies a real 429 separately from the CAPTCHA wall', () => {
+      const res = engineOf().parseMany(
+        [{ key: SO360_ENGINE_ID, body: '', status: 429, headers: {} }],
+        10,
+      )
+      expect(res.warnings?.join('\n')).toMatch(/429/)
+    })
+  })
+
+  it('says a short list was displaced rather than exhausted', () => {
+    const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: SERP, status: 200, headers: {} }], 10)
+    expect(res.items.length).toBe(2)
+    expect(res.uncertainty?.join('\n')).toMatch(/rich-media card/)
+    expect(res.uncertainty?.join('\n')).toMatch(/pn=2/)
+  })
+
+  it('stays quiet when the caller took everything the page had', () => {
+    const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: SERP, status: 200, headers: {} }], 2)
+    expect(res.items.length).toBe(2)
+    expect(res.uncertainty).toBeUndefined()
+  })
+
+  it('builds no request for a blank query', () => {
+    expect(engineOf().buildRequests('   ')).toEqual([])
+    expect(engineOf().buildRequests('q')?.map((r) => r.key)).toEqual([SO360_ENGINE_ID])
   })
 })
 

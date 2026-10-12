@@ -266,19 +266,28 @@ function parseCharset(contentTypeHeader: string): string | null {
 }
 
 /**
+ * The TLS 1.2 cipher suites Firefox offers, in Firefox's own preference
+ * order — the same list curl-impersonate's `firefox` profile uses.
+ */
+const FIREFOX_TLS12_CIPHERS = [
+  'ECDHE-ECDSA-AES128-GCM-SHA256',
+  'ECDHE-RSA-AES128-GCM-SHA256',
+  'ECDHE-ECDSA-AES256-GCM-SHA384',
+  'ECDHE-RSA-AES256-GCM-SHA384',
+  'ECDHE-ECDSA-CHACHA20-POLY1305',
+  'ECDHE-RSA-CHACHA20-POLY1305',
+  'DHE-RSA-AES128-GCM-SHA256',
+  'DHE-RSA-AES256-GCM-SHA384'
+].join(':')
+
+/**
  * Build an undici dispatcher whose DNS lookup is hard-wired to one pinned IP.
- *
- * `minVersion: 'TLSv1.3'` is not optional: undici's default TLS stack
- * produces a ClientHello fingerprint (BoringSSL / NSS-style extension
- * order) that Engine's anti-bot recognises as a non-browser client and
- * answers with off-topic results for the same query that a real browser
- * gets answered correctly.
  */
 export function pinnedDispatcherLike(pinned: PinnedTarget): Dispatcher {
   return new Agent({
     connect: {
-      minVersion: 'TLSv1.3',
-      maxVersion: 'TLSv1.3',
+      minVersion: 'TLSv1.2',
+      ciphers: FIREFOX_TLS12_CIPHERS,
       lookup: ((_hostname: string, options: { all?: boolean } | undefined, callback: LookupCallback) => {
         const record = { address: pinned.address, family: pinned.family }
         if (options && options.all) {

@@ -163,6 +163,12 @@ Engine-specific notes (the user-facing version, with the option tables, is in
   `DSH_NETWORK_SEARXNG_URL` (default `http://127.0.0.1:8888`), and
   private-network access is granted only when the configured endpoint is
   itself loopback/private.
+- **TLS** — the pinned dispatcher sets `minVersion: 'TLSv1.2'` and a Firefox
+  cipher list.
+- **360搜索** (id `so360`, `src/engines/so360.ts`) is the fourth keyless HTML
+  scraper. 360 answers a rate-limited IP with a **graphical CAPTCHA page served
+  as HTTP 200**, so `parseMany` sniffs `SO360_BLOCKED_MARKER` before the parser
+  runs and reports the wall instead of returning a confident empty answer.
 - **Mojeek** (id `mojeek-free` — the free HTML SERP, not Mojeek's official
   Search API) is a scrape whose credential is a cookie, so the Altcha
   proof-of-work is solved by `mojeekLogin()` (`src/mojeek-login.ts`, async
