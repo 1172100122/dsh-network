@@ -94,6 +94,8 @@ window.__ModuleLoader__.load({
         enginesEditCancel: '取消',
         enginesEditClose: '关闭',
         enginesDelete: '删除',
+        enginesMoveUp: '上移',
+        enginesMoveDown: '下移',
         enginesApiKeyConfigured: '已配置 API Key',
         enginesApiKeyMissing: '未配置 API Key',
         enginesApiKeyWriteOnly: '只写；浏览器读不到密钥。',
@@ -254,6 +256,8 @@ window.__ModuleLoader__.load({
         enginesEditCancel: 'Cancel',
         enginesEditClose: 'Close',
         enginesDelete: 'Remove',
+        enginesMoveUp: 'Move up',
+        enginesMoveDown: 'Move down',
         enginesApiKeyConfigured: 'API key configured',
         enginesApiKeyMissing: 'API key missing',
         enginesApiKeyWriteOnly: 'Write-only; the browser never reads the key.',
@@ -533,7 +537,7 @@ window.__ModuleLoader__.load({
       // badge + icon actions). Each category can only be added once, so the
       // row identity is the category id itself — no custom name to show.
       engineRow: {
-        display: 'flex', alignItems: 'center', gap: '12px',
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px',
         padding: '10px 14px',
         borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
       },

@@ -70,7 +70,7 @@ function routeCall(route, method, headers, body) {
     },
   }
   const res = { status: 0, headers: null, body: null }
-  res.writeHead = (status, headers) => { res.status = status; res.headers = headers }
+  res.writeHead = (status, headers) => { res.status = status; res.headers = headers; return res }
   res.end = (b) => { res.body = b }
   return route.handler(req, res).then(() => ({ status: res.status, body: res.body ? JSON.parse(res.body) : null }))
 }
@@ -448,7 +448,10 @@ try {
 
   console.log('persist-smoke: all assertions passed ✔')
   console.log(`persist file used: ${PERSIST_FILE}`)
+} catch (error) {
+  console.error(error)
+  process.exitCode = 1
 } finally {
   if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
-  process.exit(0) // force exit to avoid lingering timers from the host plugin
+  process.exit(process.exitCode ?? 0) // force exit to avoid lingering timers from the host plugin
 }

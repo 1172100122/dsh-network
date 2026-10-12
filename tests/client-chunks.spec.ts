@@ -279,6 +279,54 @@ async function configBody(overrides: Record<string, unknown> = {}) {
   return { value, revision: 1 }
 }
 
+/** Drive stateful settings and their actual debounce without a browser DOM.
+ * Like the dialog spy below, this preserves handlers that SSR drops. Hooks
+ * retain their slots between explicitly requested paints, and effects run
+ * after each paint, so both settings surfaces exercise their real save code. */
+function settingsHarness(builder: (...args: unknown[]) => () => unknown) {
+  const slots: Array<Record<string, any>> = []
+  let cursor = 0
+  let captured: Array<Record<string, any>> = []
+  let effects: Array<() => void> = []
+  const spy = {
+    ...react,
+    createElement: (type: unknown, props: unknown, ...children: unknown[]) => {
+      const element = react.createElement(type as never, props as never, ...(children as never[]))
+      captured.push(element as unknown as Record<string, any>)
+      return element
+    },
+    useState: (initial: unknown) => {
+      const index = cursor++
+      const slot = slots[index] ??= { value: initial }
+      return [slot.value, (next: any) => { slot.value = typeof next === 'function' ? next(slot.value) : next }]
+    },
+    useRef: (initial: unknown) => slots[cursor++] ??= { current: initial },
+    useEffect: (effect: () => (() => void) | void, deps: unknown[]) => {
+      const index = cursor++
+      const previous = slots[index]
+      if (previous && deps.length === previous.deps.length && deps.every((value, i) => Object.is(value, previous.deps[i]))) return
+      const slot = slots[index] = { deps }
+      effects.push(() => {
+        previous?.cleanup?.()
+        slot.cleanup = effect()
+      })
+    },
+  }
+  const Component = builder(spy, ui, localeRef)
+  return {
+    paint() {
+      cursor = 0
+      captured = []
+      renderNode(Component())
+      const pending = effects
+      effects = []
+      pending.forEach((effect) => effect())
+      return captured
+    },
+    dispose() { slots.forEach((slot) => slot.cleanup?.()) },
+  }
+}
+
 describe('browser-half chunks render through the loader contract', () => {
   beforeAll(() => {
     // The entry and the settings section probe the host's config route; a 404
@@ -372,6 +420,113 @@ describe('browser-half chunks render through the loader contract', () => {
     expect(adding).toContain(t.enginesAddTitle)
     expect(adding).toContain('DuckDuckGo')
     expect(adding).toContain('SearXNG')
+  })
+
+  it.each(['NetworkSection', 'ConfigCard'])('reorders engines and autosaves the latest chain in %s', async (surface) => {
+    const { entry, chunks } = await createChunkLoader().load()
+    const { defaultConfig, summarize, applyCardSettings } = await import('../dsh/config-summary.js')
+    const t = labelsFrom(entry)
+    // An existing string-array config needs no migration. A stored engine
+    // key and its options must survive changing only the chain's order.
+    const config = defaultConfig({
+      searchEngines: ['bing', 'brave', 'github'],
+      searchEngineApiKeys: { brave: 'stored-secret' },
+      searchEngineConfigs: { brave: { options: { country: 'DE' } } },
+      githubToken: 'stored-github-token',
+    })
+    const originalOrder = config.searchEngines.slice()
+    let revision = 1
+    const writes: Array<Record<string, any>> = []
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, options?: Record<string, any>) => {
+      expect(url).toBe('/dsh-network/config')
+      if (options?.method === 'PUT') {
+        expect(options.headers['if-match']).toBe(String(revision))
+        const patch = JSON.parse(options.body)
+        writes.push(patch)
+        applyCardSettings(config, patch)
+        revision++
+      }
+      return { ok: true, status: 200, json: async () => ({ value: summarize(config), revision }) }
+    }))
+    vi.useFakeTimers()
+    const harness = settingsHarness(chunks['client.settings.js'][surface] as (...args: unknown[]) => () => unknown)
+    try {
+      let nodes = harness.paint()
+      if (surface === 'ConfigCard') {
+        nodes.find((node) => node.props?.['aria-expanded'] === false)!.props.onClick()
+        harness.paint()
+      }
+      await vi.advanceTimersByTimeAsync(0)
+
+      const button = (direction: 'up' | 'down', id: string) => {
+        const label = direction === 'up' ? t.enginesMoveUp : t.enginesMoveDown
+        const found = nodes.find((node) => node.type === 'button' && node.props?.['aria-label'] === label + ': ' + id)
+        expect(found, `${direction} control for ${id}`).toBeTruthy()
+        return found!.props
+      }
+      const order = () => nodes.filter((node) => node.type === 'button' && node.props?.title === t.enginesMoveUp)
+        .map((node) => node.props['aria-label'].slice(t.enginesMoveUp.length + 2))
+      nodes = harness.paint()
+      expect(order()).toEqual(originalOrder)
+      expect(button('up', 'bing').disabled).toBe(true)
+      expect(button('down', 'github').disabled).toBe(true)
+      expect(button('down', 'bing').disabled).toBe(false)
+      expect(button('up', 'github').disabled).toBe(false)
+      // Guard the handlers too: bypassing the native disabled button must
+      // not mutate the chain or schedule a redundant save at either end.
+      button('up', 'bing').onClick()
+      button('down', 'github').onClick()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(writes).toHaveLength(0)
+
+      button('up', 'brave').onClick()
+      nodes = harness.paint()
+      expect(order()).toEqual(['brave', 'bing', 'github'])
+      expect(button('up', 'brave').disabled).toBe(true)
+      button('down', 'bing').onClick()
+      nodes = harness.paint()
+      expect(order()).toEqual(['brave', 'github', 'bing'])
+      expect(button('down', 'bing').disabled).toBe(true)
+      // Repeated moves before the debounce must save the latest paint.
+      expect(config.searchEngines).toEqual(originalOrder)
+      await vi.advanceTimersByTimeAsync(499)
+      expect(writes).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(writes).toHaveLength(1)
+      expect(writes[0].searchEngines).toEqual(['brave', 'github', 'bing'])
+      expect(config.searchEngines).toEqual(['brave', 'github', 'bing'])
+      expect(config.searchEngineApiKeys.brave).toBe('stored-secret')
+      expect(config.searchEngineConfigs.brave.options).toEqual({ country: 'DE' })
+      expect(config.githubToken).toBe('stored-github-token')
+
+      // Another move after save must keep working with the new revision.
+      nodes = harness.paint()
+      button('down', 'brave').onClick()
+      nodes = harness.paint()
+      expect(order()).toEqual(['github', 'brave', 'bing'])
+      await vi.advanceTimersByTimeAsync(500)
+      expect(writes).toHaveLength(2)
+      expect(config.searchEngines).toEqual(['github', 'brave', 'bing'])
+      // Removing rows leaves a single engine with both controls disabled.
+      for (const id of ['brave', 'bing']) {
+        nodes = harness.paint()
+        nodes.find((node) => node.props?.['aria-label'] === t.enginesDelete + ': ' + id)!.props.onClick()
+      }
+      nodes = harness.paint()
+      expect(order()).toEqual(['github'])
+      expect(button('up', 'github').disabled).toBe(true)
+      expect(button('down', 'github').disabled).toBe(true)
+      button('up', 'github').onClick()
+      button('down', 'github').onClick()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(config.searchEngines).toEqual(['github'])
+      expect(writes).toHaveLength(3)
+    } finally {
+      harness.dispose()
+      vi.useRealTimers()
+      vi.stubGlobal('fetch', originalFetch)
+    }
   })
 
   /**
