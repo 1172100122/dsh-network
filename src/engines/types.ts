@@ -69,18 +69,45 @@ export function normalizeEngineIds(ids: readonly string[]): string[] {
 /**
  * Env knobs the CLI reads for the keyed engines, paired with HOW the
  * credential rides on a request. Declaring it on the engine keeps the
- * per-provider quirk (Brave's `X-Subscription-Token` vs a Bearer token)
- * inside the engine while the CLI stays the only actor that ever holds the
- * secret — the engine sees `options.hasApiKey`, never the key itself.
+ * per-provider quirk (Brave's `X-Subscription-Token` vs a Bearer token, or
+ * Mojeek's billed Search API riding the key inside the URL) inside the engine
+ * while the CLI stays the only actor that ever holds the secret — the engine
+ * sees `options.hasApiKey`, never the key itself.
  *
  * Engines WITHOUT an `auth` block are the keyless HTML scrapers, whose
  * reachability is checked by fetching rather than by a token.
  */
 export interface EngineAuth {
-  /** Header the credential travels in (case-insensitive on the wire). */
-  readonly header: string
+  /**
+   * Where the credential rides on the wire. Defaults to `header`: the same
+   * shape every existing engine (Brave, Mojeek's `chllg` cookie) has always
+   * used.
+   *
+   *   `header` — value goes into a request header named `header` (see below).
+   *   `query`  — value goes into a URL query parameter named `queryName`
+   *              (Brave has no instance of this; Mojeek's official Search API
+   *              is the first — it requires `?api_key=…`).
+   *
+   * Engines that read a `query` credential see the value in
+   * `buildRequestOptions(engine, …).apiKey` (the CLI never lets a header-mode
+   * engine see it) and compose the URL themselves; the CLI never strips it
+   * from the response cache key path either, because every `query`-mode
+   * engine declares `in` and the URL it builds already carries the parameter.
+   */
+  readonly in?: 'header' | 'query'
+  /**
+   * Header the credential travels in (case-insensitive on the wire). Required
+   * when `in === 'header'`; omitted by `in === 'query'` engines (the key rides
+   * in the URL instead).
+   */
+  readonly header?: string
   /** Header value format: `raw` (default) or `bearer` (prepends `Bearer `). */
   readonly scheme?: 'raw' | 'bearer'
+  /**
+   * Query parameter name used when `in === 'query'`. Defaults to `api_key`
+   * (the convention Mojeek's billed Search API follows). Ignored otherwise.
+   */
+  readonly queryName?: string
   /**
    * Env var the CLI resolves the key from. `DSH_NETWORK_SEARCH_ENGINE_API_KEYS`
    * (a JSON `{ engineId: key }` map the host builds per invoke) is always

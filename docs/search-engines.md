@@ -8,7 +8,7 @@ the fields that shape search as a whole. For the rest of the settings see
 
 ## The chain
 
-Eight engines ship with the plugin. The chain is tried **in order**, and the
+Nine engines ship with the plugin. The chain is tried **in order**, and the
 first engine that returns hits wins:
 
 | Engine id | Source | Default chain | Credential |
@@ -20,18 +20,19 @@ first engine that returns hits wins:
 | `github` | hybrid REST `/search/{index}`, RRF-fused | opt-in | token optional |
 | `searxng` | self-hosted SearXNG JSON API | opt-in | none (endpoint-scoped) |
 | `brave` | Brave Search JSON API | opt-in | **keyed, billed** |
-| `mojeek-free` | HTML scrape of `www.mojeek.com/search` | opt-in | none |
+| `mojeek-free` | HTML scrape of `www.mojeek.com/search` (personal study purposes) | opt-in | none |
+| `mojeek` | Mojeek official Search API (`fmt=json`) | opt-in | **keyed, billed** |
 
-The three scrapers are always reachable; the other five need something to be
+The three scrapers are always reachable; the other six need something to be
 worth adding — a token, a hostname, a subscription, an index of their own, or
 an IP budget you are willing to spend — so they are never enabled behind your
 back. Default chain order is `['bing', 'duckduckgo', 'baidu']`.
 
-> **The id is `mojeek-free`, not `mojeek`.** Mojeek also sells an official
-> Search API (`api.mojeek.com`, billed, real API key), and the bare product
-> name next to a field labelled *API Key* read like that paid product. The
-> engine here is the free, Altcha-authed web SERP — and it is the only id the
-> CLI, the settings dialog and `--engine` accept.
+> **Two engines share the host `www.mojeek.com`.** `mojeek-free` is the
+> free, cookie-gated web SERP (Altcha proof-of-work). `mojeek` is Mojeek's
+> official billed Search API (`fmt=json`, `?api_key=…`). The id is the
+> product, not the host: each chain row points at one engine and the engine
+> decides what kind of answer to expect.
 
 A **pin** bypasses the chain and queries one engine directly:
 
@@ -265,6 +266,52 @@ Three limits are worth knowing before you put it in the chain:
 
 Optionally set `options` (one `key=value` per line): `s=<1-based start index>`
 for paging. Everything else is dropped before it reaches the host.
+
+## Mojeek (Search API)
+
+Mojeek's official Search API — the same index, reached by the
+`api_key`-authenticated JSON endpoint at `https://www.mojeek.com/search`.
+
+1. Subscribe to a Mojeek plan and copy the API key from your account page
+   (the official sign-up is on the Mojeek website; the docs are at
+   <https://www.mojeek.com/support/api/search/>).
+2. Add `mojeek` to the chain (or pin it per call with `engine: "mojeek"`).
+3. Paste the key into the dialog's **API Key** field — it rides in the URL
+   itself as `?api_key=…`, never in a header. The browser never reads it
+   back; only the green *API key configured* badge is returned.
+
+Without a key the engine sends **no request** (the CLI synthesizes a 401 so
+"missing key" and "rejected key" classify on one code path, the same way
+Brave does).
+
+The engine option `s=<1-based start index>` pages through results; `t`
+follows the call's result cap and is the only option that scales with `max`.
+Everything else is documented below.
+
+| Parameter | Accepted values | Effect |
+|---|---|---|
+| `s` | `1`-`1000` (integer) | 1-based start index for paging (`s=11` is page 2 with `t=10`). |
+| `t` | `1`-`100` (integer) | Results per page; default 10. |
+| `since` | `YYYYMMDD` / `day` / `month` / `year` | Recency filter; `YYYYMMDD` values must be exactly 8 digits. |
+| `before` | same as `since` | Upper-bound date; results are returned *before* this value. |
+| `rb` | 2-letter ISO 3166-1 (e.g. `GB`) | Prefer pages from this country/region. |
+| `rbb` | `1`-`100` (integer) | Boost strength, paired with `rb`; recommended 10. |
+| `lb` | 2-letter ISO 639-1 (e.g. `EN`) | Prefer pages in this language. |
+| `lbb` | `1`-`100` (integer) | Boost strength, paired with `lb`; recommended 100. |
+| `lr` | `EN`,`FR` (β) | Beta: restrict to specific language. |
+| `safe` | `0` / `1` | Safe search on/off. |
+| `date` | `0` / `1` | Include last-modified date as the hit's `published_at`. |
+| `cdate` | `0` / `1` | Include the date the page was crawled. |
+| `size` | `0` / `1` | Include the document's size. |
+| `site` | domain (e.g. `mojeek.com`) | Restrict to one site. |
+| `fi` / `fe` | comma-separated domains | Include / exclude (max 25 each; prefix with `.` for subdomains). |
+| `tlen` | `0`-`127` (integer, default 56) | Result title length. |
+| `dlen` | `0`-`511` (integer, default 160) | Snippet length. |
+| `datewr` | `0` / `100` | Rank by date when set to 100. |
+| `qm` | excluded words | URL-encoded list of words to discard. |
+
+Unknown keys and out-of-vocabulary values are dropped before the URL is
+composed, so a typo in the settings textarea burns **no** call.
 
 ## Credentials
 

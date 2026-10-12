@@ -55,6 +55,13 @@ import {
   normalizeSearxngEndpoint,
 } from '../src/engines/searxng.ts'
 import { BRAVE_API_KEY_ENV, BraveSearchEngine, buildBraveUrl } from '../src/engines/brave.ts'
+import {
+  MOJEEK_ENGINE_ID,
+  MOJEEK_API_KEY_ENV,
+  MojeekSearchEngine,
+  buildMojeekApiUrl,
+  parseMojeekApiResults,
+} from '../src/engines/mojeek.ts'
 import { cleanText, defaultRegistry, registerDefaultEngines } from '../src/engines/index.ts'
 import {
   SO360_ENGINE_ID,
@@ -588,7 +595,7 @@ describe('GitHubSearchEngine', () => {
   it('is registered in the default registry as chain tail', () => {
     registerDefaultEngines(defaultRegistry)
     const all = defaultRegistry.all().map((e) => e.id)
-    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free'])
+    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek'])
   })
 })
 
@@ -1141,6 +1148,294 @@ describe('BraveSearchEngine', () => {
   it('parse: single-body compatibility path', () => {
     const body = JSON.stringify({ web: { results: [{ url: 'https://a.example/1', title: 'T', description: 'S' }] } })
     const items = new BraveSearchEngine().parse(body, 10)
+    expect(items.length).toBe(1)
+    expect(items[0]?.snippet).toBe('S')
+  })
+})
+
+// ─────────────────────────── mojeek (Search API) engine ───────────────────────────
+// Mojeek's official billed Search API. Distinct from `mojeek-free` — same host,
+// different credential (api_key rides in the URL, not a header / cookie), JSON
+// response (`fmt=json` is hard-coded into buildMojeekApiUrl).
+describe('MojeekSearchEngine', () => {
+  const savedOptions = process.env.DSH_NETWORK_ENGINE_OPTIONS
+  const savedKey = process.env[MOJEEK_API_KEY_ENV]
+  beforeAll(() => {
+    delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    delete process.env[MOJEEK_API_KEY_ENV]
+  })
+  afterAll(() => {
+    if (savedOptions === undefined) delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    else process.env.DSH_NETWORK_ENGINE_OPTIONS = savedOptions
+    if (savedKey === undefined) delete process.env[MOJEEK_API_KEY_ENV]
+    else process.env[MOJEEK_API_KEY_ENV] = savedKey
+  })
+
+  it('declares the url-keyed credential and never sets a header name', () => {
+    // The auth block tells the CLI to put the secret in the URL via
+    // ?api_key=… (`in === 'query'`), the opposite of Brave's header mode.
+    // A mis-spelled `in` would either strip the key (every call rejected) or
+    // silently smuggle it into a header Mojeek ignores (every call metered,
+    // key in the host's logs); both are silent defects this guard catches.
+    const engine = new MojeekSearchEngine()
+    expect(engine.id).toBe(MOJEEK_ENGINE_ID)
+    expect(engine.displayName).toBe('Mojeek (API)')
+    expect(engine.endpoint).toBe('https://www.mojeek.com/search')
+    expect(engine.auth?.in).toBe('query')
+    expect(engine.auth?.queryName).toBe('api_key')
+    expect(engine.auth?.apiKeyEnv).toBe(MOJEEK_API_KEY_ENV)
+    // Header-mode engines carry `auth.header`; a query-mode engine doesn't
+    // need one and the CLI never reads it, so omitting it is the contract.
+    expect(engine.auth?.header).toBeUndefined()
+  })
+
+  it('pins api_key= and fmt=json on every request, with t capped to 100', () => {
+    expect(buildMojeekApiUrl('rust vs go', { perPage: 10 }, 'secret-key')).toBe(
+      'https://www.mojeek.com/search?q=rust%20vs%20go&fmt=json&api_key=secret-key&t=10',
+    )
+    // The standalone-CLI `max` spelling maps to `t` too.
+    expect(buildMojeekApiUrl('q', { max: 25 }, 'k')).toContain('t=25')
+    // The per-page cap is 100, mirroring Mojeek's documented envelope.
+    expect(buildMojeekApiUrl('q', { max: 999 }, 'k')).toContain('t=100')
+    expect(buildMojeekApiUrl('q', { max: 0 }, 'k')).toContain('t=1')
+    // The `perPage` argument wins over `max`, the same precedence Brave uses.
+    expect(buildMojeekApiUrl('q', { perPage: 3, max: 10 }, 'k')).toContain('t=3')
+    // A zero/negative page offset is dropped rather than rewritten — typos
+    // don't burn billed calls.
+    expect(buildMojeekApiUrl('q', { s: 0 }, 'k')).not.toContain('s=')
+    expect(buildMojeekApiUrl('q', { s: -1 }, 'k')).not.toContain('s=')
+    expect(buildMojeekApiUrl('q', { s: 11 }, 'k')).toContain('s=11')
+  })
+
+  it('passes through only the documented option vocabulary', () => {
+    // Valid enum + numeric options survive; unknown keys, malformed values
+    // and out-of-range boosts are dropped so a typo can't reach Mojeek.
+    const url = buildMojeekApiUrl(
+      'vue 3',
+      {
+        perPage: 5,
+        since: '20260201',
+        before: 'year',
+        rb: 'gb',
+        rbb: 10,
+        lb: 'en',
+        lbb: 100,
+        lr: 'en,fr',
+        safe: 1,
+        date: 1,
+        cdate: 0,
+        size: 1,
+        site: 'mojeek.com',
+        fi: '.example.com,foo.com',
+        fe: 'spam.com',
+        tlen: 80,
+        dlen: 200,
+        datewr: 100,
+        qm: 'spam ads',
+      },
+      'k',
+    )
+    expect(url).toBe(
+      'https://www.mojeek.com/search?q=vue%203&fmt=json&api_key=k&t=5' +
+        '&since=20260201&before=year&rb=GB&rbb=10&lb=EN&lbb=100' +
+        '&lr=EN%2CFR&safe=1&date=1&cdate=0&size=1&datewr=100&tlen=80&dlen=200' +
+        '&fi=.example.com%2Cfoo.com&fe=spam.com&site=mojeek.com&qm=spam%20ads',
+    )
+    // `s=0` is dropped (the documented start range is 1..1000); the rest of
+    // the keys follow the order in `EXTRA_KEYS` so a future engine author
+    // can reason about it without an alphabetization surprise.
+    const dropped = buildMojeekApiUrl('q', {
+      since: '2026-02-01', // wrong shape → dropped
+      rb: 'England', // not 2 letters → dropped
+      rbb: 200, // out of range → dropped
+      lb: '', // empty → dropped
+      lbb: 'lots', // not an integer → dropped
+      lr: 'foo,bar', // bad ISO codes → dropped
+      safe: 2, // not 0|1 → dropped
+      date: 'yes', // not an integer → dropped
+      // A typed-string of `'1'` reads back as `1` (an integer, in {0,1}) and
+      // passes the option gate — every other engine is the same and the
+      // settings dialog is the defense, not the URL builder. Use a string
+      // that does NOT coerce to a valid integer to prove the gate works:
+      cdate: 'maybe', // not an integer → dropped
+      size: 1.5, // not an integer → dropped
+      tlen: 200, // out of 0..127 → dropped
+      dlen: 700, // out of 0..511 → dropped
+      datewr: 50, // not 0|100 → dropped
+      qm: '', // empty → dropped
+      junk: 'x', // unknown key → dropped
+    }, 'k')
+    expect(dropped).toBe('https://www.mojeek.com/search?q=q&fmt=json&api_key=k&t=10')
+  })
+
+  it('omits api_key entirely when no key is provided (callers compose what they have)', () => {
+    // The key is optional at the buildUrl level: a shell that forgot to pass
+    // one still gets a URL — the request just won't authenticate. The CLI's
+    // short-circuit (synthesized 401 for a missing key) sits upstream of this.
+    expect(buildMojeekApiUrl('q', { max: 10 }, '')).not.toContain('api_key=')
+    expect(buildMojeekApiUrl('q', { max: 10 })).not.toContain('api_key=')
+  })
+
+  it('reads per-engine options out of DSH_NETWORK_ENGINE_OPTIONS', () => {
+    process.env.DSH_NETWORK_ENGINE_OPTIONS = JSON.stringify({
+      mojeek: { date: 1, since: '20260101' },
+      other: { x: 'y' },
+    })
+    try {
+      const [req] = new MojeekSearchEngine().buildRequests('q', { perPage: 3, apiKey: 'k' })
+      expect(req?.key).toBe(MOJEEK_ENGINE_ID)
+      expect(req?.url).toContain('date=1')
+      expect(req?.url).toContain('since=20260101')
+      // A different engine's options must not leak into this one.
+      expect(req?.url).not.toContain('x=y')
+    } finally {
+      delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    }
+  })
+
+  it('parseMojeekApiResults: maps url/title/desc and clamps to max', () => {
+    const body = JSON.stringify({
+      response: {
+        status: 'OK',
+        head: { results: 2, exact: true },
+        results: [
+          {
+            url: 'https://a.example/1',
+            title: 'Rust vs Go',
+            desc: 'Benchmarks.',
+          },
+          { url: 'https://b.example/2', title: 'Go is fine', desc: 'Performance notes.' },
+          { url: 'https://c.example/3', title: 'Dropped' }, // over max
+        ],
+      },
+    })
+    const items = parseMojeekApiResults(body, 2)
+    expect(items.length).toBe(2)
+    expect(items[0]?.title).toBe('Rust vs Go')
+    expect(items[0]?.snippet).toBe('Benchmarks.')
+  })
+
+  it('parseMojeekApiResults: titles fall back to the URL, malformed URLs are dropped', () => {
+    const items = parseMojeekApiResults(
+      JSON.stringify({
+        response: {
+          status: 'OK',
+          results: [
+            { url: 'https://a.example/1', title: '' },
+            { url: '/relative', title: 'Bad URL' },
+            { url: '', title: 'Missing URL' },
+          ],
+        },
+      }),
+      10,
+    )
+    expect(items.length).toBe(1)
+    expect(items[0]?.title).toBe('https://a.example/1')
+  })
+
+  it('parseMojeekApiResults: published_at comes from the formatted `date` field', () => {
+    const items = parseMojeekApiResults(
+      JSON.stringify({
+        response: {
+          status: 'OK',
+          results: [
+            { url: 'https://a.example/1', title: 'T', date: 'Tue Jul 10 05:19:00 2007' },
+            { url: 'https://b.example/2', title: 'No date' },
+            { url: 'https://c.example/3', title: 'Bad shape', date: '2026-01-01T00:00:00' },
+          ],
+        },
+      }),
+      10,
+    )
+    expect(items[0]?.published_at).toBe('Tue Jul 10 05:19:00 2007')
+    expect(items[1]?.published_at).toBeUndefined()
+    // A field that doesn't look like Mojeek's formatted date is silently
+    // dropped — wrong dates in the evidence are worse than no dates.
+    expect(items[2]?.published_at).toBeUndefined()
+  })
+
+  it('parseMojeekApiResults: empty / non-JSON / shape-less bodies return []', () => {
+    expect(parseMojeekApiResults('', 10)).toEqual([])
+    expect(parseMojeekApiResults('not json', 10)).toEqual([])
+    expect(parseMojeekApiResults(JSON.stringify({ results: [] }), 10)).toEqual([])
+    // A `response: { status: 'OK' }` body with no `results` array returns [].
+    expect(parseMojeekApiResults(JSON.stringify({ response: { status: 'OK' } }), 10)).toEqual([])
+  })
+
+  it('parseMany: a 200 OK body with `response.status` not "OK" surfaces the error', () => {
+    // Mojeek answers 200 + `response.status === "ERROR: Daily Limit Reached"`
+    // when the day's quota runs out. The parser would otherwise read this
+    // as a successful zero-hit answer.
+    const body = JSON.stringify({
+      response: { status: 'ERROR: Daily Limit Reached' },
+    })
+    const res = new MojeekSearchEngine().parseMany([{ key: MOJEEK_ENGINE_ID, body, status: 200, headers: {} }], 10)
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('Daily Limit Reached')
+  })
+
+  it('parseMany: 401 / 403 are auth failures; 429 is rate limit; 4xx otherwise', () => {
+    const engine = new MojeekSearchEngine()
+    const auth = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 401, headers: {} }], 10)
+    expect(auth.warnings?.[0]).toContain('authentication failed')
+    expect(auth.warnings?.[0]).toContain(MOJEEK_API_KEY_ENV)
+
+    const rejected = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 403, headers: {} }], 10)
+    expect(rejected.warnings?.[0]).toContain('authentication failed')
+
+    const limited = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 429, headers: {} }], 10)
+    expect(limited.warnings?.[0]).toContain('rate limited')
+
+    const other = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 418, headers: {} }], 10)
+    expect(other.warnings?.[0]).toContain('unexpected HTTP 418')
+  })
+
+  it('parseMany: synthetic 401 (no key) names the fix and names the env var', () => {
+    // Same shape Brave tests; the only thing that differs is the env var
+    // name the warning points the user at. Verify it by name so a future
+    // rename of DSH_NETWORK_MOJEEK_API_KEY is caught here.
+    const res = new MojeekSearchEngine().parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 401, headers: {} }], 10)
+    expect(res.warnings?.[0]).toContain(MOJEEK_API_KEY_ENV)
+  })
+
+  it('parseMany: a non-JSON body is reported, not parsed as zero hits', () => {
+    const res = new MojeekSearchEngine().parseMany(
+      [{ key: MOJEEK_ENGINE_ID, body: '<html>unexpected</html>', status: 200, headers: {} }],
+      10,
+    )
+    expect(res.warnings?.[0]).toContain('not JSON')
+  })
+
+  it('parseMany: transport failure lands in warnings, not in items', () => {
+    const res = new MojeekSearchEngine().parseMany(
+      [{ key: MOJEEK_ENGINE_ID, body: '', status: 0, error: 'getaddrinfo ENOTFOUND www.mojeek.com' }],
+      10,
+    )
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('ENOTFOUND')
+  })
+
+  it('parseMany: a 200 with `response.status === "ERROR"` still parses results when present', () => {
+    // Defect class: the daily-limit message and a non-empty result list
+    // shouldn't co-exist, but if Mojeek ever answers both ways (e.g. a
+    // soft quota warning) the parser should surface the warning AND pass
+    // the rows through.
+    const body = JSON.stringify({
+      response: {
+        status: 'ERROR: Soft warning',
+        results: [{ url: 'https://a.example/1', title: 'T' }],
+      },
+    })
+    const res = new MojeekSearchEngine().parseMany([{ key: MOJEEK_ENGINE_ID, body, status: 200, headers: {} }], 10)
+    expect(res.items.length).toBe(1)
+    expect(res.warnings?.[0]).toContain('Soft warning')
+  })
+
+  it('parse: single-body compatibility path mirrors parseMany', () => {
+    const body = JSON.stringify({
+      response: { status: 'OK', results: [{ url: 'https://a.example/1', title: 'T', desc: 'S' }] },
+    })
+    const items = new MojeekSearchEngine().parse(body, 10)
     expect(items.length).toBe(1)
     expect(items[0]?.snippet).toBe('S')
   })

@@ -454,7 +454,8 @@ function helpText(): string {
     '  --max-bytes       int        Byte cap for one download (default 100 MB; the transfer',
     '                                FAILS past the cap, it never truncates)',
     '',
-    'Engine choices for search: bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free. Default chain is the order given above.',
+    'Engine choices for search: bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free, mojeek.',
+    'Default chain is the order given above; the five after the three default engines are opt-in.',
     'GitHub engine: hybrid REST search (repositories/code/issues/users). Code search needs',
     '  DSH_NETWORK_GITHUB_TOKEN; anonymous search is limited to 10 req/min per IP.',
     '360搜索 engine (`so360`): keyless Chinese index at https://www.so.com/s. IP rate-limited — a burst',
@@ -478,6 +479,15 @@ function helpText(): string {
     '      DSH_NETWORK_MOJEEK_COOKIE, or store it as searchEngineApiKeys["mojeek-free"] in',
     '      ~/.dsh/dsh-network.json.',
     '  Registered last and absent from the default chain: an unconfigured install never touches it.',
+    'Mojeek Search API (`mojeek`): Mojeek\'s official billed Search API (https://www.mojeek.com/support/api/...).',
+    '  Every query is billed; without a key the engine sends NO request. The key rides in the URL itself',
+    '  (?api_key=…), resolved from the host-injected DSH_NETWORK_SEARCH_ENGINE_API_KEYS map, or from the',
+    '  DSH_NETWORK_MOJEEK_API_KEY env var for a standalone run. Response is JSON (`fmt=json`).',
+    '  Optional `options` (settings UI; one key=value per line): s=1..1000 (start, 1-based paging),',
+    '  t=1..100 (results per page), since=YYYYMMDD|day|month|year (recency), before=YYYYMMDD,',
+    '  rb=GB|rbb=10 (region boost), lb=EN|lbb=100 (language boost), lr=EN,FR (β language restrict),',
+    '  safe=0|1, date=0|1 (include last-modified date as published_at), cdate=0|1, size=0|1,',
+    '  site=mojeek.com, fi/.example.com (max 25), fe, tlen=0..127, dlen=0..511, datewr=0|100, qm (excluded words).',
     'web_sitemap: curated table of authoritative portals (domain, description, category, priority,',
     '  searchUrl template). Helps the model skip generic search for known sources.',
   ].join('\n')
@@ -605,14 +615,50 @@ function resolveEngineApiKey(
 }
 
 /**
- * The credential header for one keyed engine, according to the engine's own
- * `auth` declaration. Returns an empty object for keyless engines (every
+ * The credential placement for one keyed engine, according to the engine's
+ * own `auth` declaration. Returns an empty pair for keyless engines (every
  * HTML scraper) and for a keyed engine with no key — the caller never gets
  * that far in the latter case: `requiresToken` short-circuits the request.
+ *
+ * Two placement modes exist (declared via `auth.in`):
+ *
+ *   `header` (the default and what Brave + Mojeek's `chllg` cookie use) —
+ *   the key rides in a request header. `headers` is the dict to merge over
+ *   `defaultHeaders`.
+ *
+ *   `query` (Mojeek's billed Search API is the first instance) — the key is a
+ *   URL query parameter (`?api_key=…`). `headers` is empty because a missing
+ *   or rejected `api_key` would otherwise show as a credential rejection on
+ *   the wrong code path, and `queryParam` carries the `{ name, value }` pair
+ *   so the engine can compose the URL itself. The CLI never inspects the
+ *   URL after the engine builds it — neither to redact the key for logs nor
+ *   to skip it on a retry; both would be silently wrong.
+ *
+ * Engines that want `query` mode compose their URL by reading the resolved
+ * key out of `buildRequestOptions(engine, …).apiKey` (this function only
+ * handles headers).
+ */
+function authFor(engine: SearchEngine, key: string): {
+  headers: Record<string, string>
+  queryParam: { name: string; value: string } | null
+} {
+  if (!engine.auth || key === '') return { headers: {}, queryParam: null }
+  if (engine.auth.in === 'query') {
+    return { headers: {}, queryParam: { name: engine.auth.queryName ?? 'api_key', value: key } }
+  }
+  return {
+    headers: { [engine.auth.header]: engine.auth.scheme === 'bearer' ? `Bearer ${key}` : key },
+    queryParam: null,
+  }
+}
+
+/**
+ * The credential header for one keyed engine — legacy spelling kept as a
+ * thin wrapper around `authFor` so the existing `runSearch` reads
+ * unambiguously. New code should call `authFor` directly.
  */
 function authHeadersFor(engine: SearchEngine, key: string): Record<string, string> {
-  if (!engine.auth || key === '') return {}
-  return { [engine.auth.header]: engine.auth.scheme === 'bearer' ? `Bearer ${key}` : key }
+  return authFor(engine, key).headers
 }
 
 /**
@@ -677,11 +723,17 @@ function canonicalizeOptionKeys(map: Record<string, unknown>): Record<string, un
  * them from `process.env` via `readEngineEnvOptions` — which the persistent
  * server cannot see, because the host ships the options per `/invoke` instead
  * of in the child's environment.
+ *
+ * `apiKey` is only filled in for `auth.in === 'query'` engines (Mojeek's
+ * official Search API). Headers-mode engines never see the key: the CLI
+ * injects the header itself, and the secret doesn't ride on the options
+ * bag the persistent server logs.
  */
 function buildRequestOptions(
   engine: SearchEngine,
   perPage: number,
   hasApiKey: boolean,
+  apiKey: string,
   config: ParsedConfig,
 ): Record<string, unknown> {
   const own = config.engineOptions[engine.id]
@@ -693,6 +745,11 @@ function buildRequestOptions(
     indexes: config.githubIndexes,
     sort: config.githubSort,
     engineOptions: own,
+    // Only `in: 'query'` engines read this; every other engine (Brave, the
+    // chllg-cookie case) sees `hasApiKey: true` and lets `authFor()` inject
+    // the header instead. Carrying the secret in the bag for a non-query
+    // engine would put it on a path the engine has no reason to see.
+    ...(engine.auth?.in === 'query' ? { apiKey } : {}),
   }
 }
 
@@ -796,7 +853,7 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
       // Hybrid engines (e.g. GitHub) fan out into several parallel
       // requests and fuse the bodies themselves; classic engines stay
       // on the single-request path.
-      const requests = engine.buildRequests?.(query, buildRequestOptions(engine, max, hasApiKey, config))
+      const requests = engine.buildRequests?.(query, buildRequestOptions(engine, max, hasApiKey, apiKey, config))
       if (requests && requests.length > 0 && engine.parseMany) {
         let bodies = await Promise.all(
           requests.map(async (req): Promise<EngineBody> => {
@@ -857,7 +914,7 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
               ...(config.githubToken !== '' ? { authorization: `Bearer ${config.githubToken}` } : {}),
               ...(flags.headers ?? {}),
             }
-            const retryRequests = engine.buildRequests?.(query, buildRequestOptions(engine, max, hasApiKey, config))
+            const retryRequests = engine.buildRequests?.(query, buildRequestOptions(engine, max, hasApiKey, apiKey, config))
             const retryAuthBlocked = engine.auth !== undefined && !hasApiKey
             if (retryRequests && retryRequests.length > 0) {
               bodies = await Promise.all(

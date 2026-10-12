@@ -50,6 +50,14 @@ export {
   buildMojeekUrl,
   parseMojeekResults,
 } from './mojeek-free.ts'
+export {
+  MojeekSearchEngine,
+  MOJEEK_ENGINE_ID,
+  MOJEEK_ENDPOINT,
+  MOJEEK_API_KEY_ENV,
+  buildMojeekApiUrl,
+  parseMojeekApiResults,
+} from './mojeek.ts'
 // web_sitemap is the curated portal catalog used by the LLM to pick
 // authoritative sources. It lives outside the engine registry (it is
 // pure data, not a search backend) so we only re-export it from here
@@ -65,17 +73,23 @@ import { GitHubSearchEngine } from './github.ts'
 import { SearxngSearchEngine } from './searxng.ts'
 import { BraveSearchEngine } from './brave.ts'
 import { MojeekFreeSearchEngine } from './mojeek-free.ts'
+import { MojeekSearchEngine } from './mojeek.ts'
 
 /** The process-wide registry. Call `registerDefaultEngines` at startup. */
 export const defaultRegistry = new SearchEngineRegistry()
 
 /**
- * Register Bing, DuckDuckGo, Baidu, 360搜索, GitHub, SearXNG, Brave and
- * Mojeek (free) as the search chain.
+ * Register Bing, DuckDuckGo, Baidu, 360搜索, GitHub, SearXNG, Brave,
+ * Mojeek (free) and Mojeek (official Search API) as the search chain.
  *
  * The chain runs engines in registration order, so the most reliable (Bing)
  * goes first. Registration order is NOT the default chain — that is
  * `DEFAULT_SEARCH_ENGINES` in config.ts, which stops at Baidu.
+ *
+ * The two Mojeek engines are registered LAST on purpose: their credentials
+ * are different (a cookie for `mojeek-free`, an API key for `mojeek`), but
+ * they share a host and so should sit at the chain tail for the same reason
+ * a fresh install must not touch mojeek.com unless explicitly added.
  *
  * Override the chain via `DSH_NETWORK_SEARCH_ENGINES` or the settings UI.
  */
@@ -89,6 +103,7 @@ export function registerDefaultEngines(registry: SearchEngineRegistry = defaultR
     new SearxngSearchEngine(),
     new BraveSearchEngine(),
     new MojeekFreeSearchEngine(),
+    new MojeekSearchEngine(),
   ]
   for (const e of engines) registry.register(e)
   return engines

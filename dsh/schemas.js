@@ -314,7 +314,7 @@ const WEB_CONFIG_PATCH_SCHEMA = {
     searchEngines: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Search-engine chain order; one of bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free.',
+      description: 'Search-engine chain order; one of bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free, mojeek.',
     },
     searchEngineConfigs: {
       type: 'object',

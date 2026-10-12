@@ -22,7 +22,7 @@ export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'O
 export type HttpMethod = (typeof HTTP_METHODS)[number]
 
 export const DEFAULT_SEARCH_ENGINES = ['bing', 'duckduckgo', 'baidu'] as const
-export const SEARCH_ENGINE_IDS = new Set<string>(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free'])
+export const SEARCH_ENGINE_IDS = new Set<string>(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek'])
 export const GITHUB_INDEX_IDS = new Set<string>(['repositories', 'code', 'issues', 'users'])
 export const GITHUB_SORTS = ['best', 'stars', 'updated'] as const
 

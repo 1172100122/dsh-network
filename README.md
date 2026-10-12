@@ -44,7 +44,7 @@ amount of ground until the model walks into one of these walls:
 long-lived Node process:
 
 - **Multiple search engines** — Bing, DuckDuckGo, Baidu, tried in order by 
-  default. GitHub, SearXNG, Brave, Mojeek (free web) and 360搜索 join when you
+  default. GitHub, SearXNG, Brave, Mojeek and 360搜索 join when you
   want them.
 - **Nothing gets truncated.** Oversized fetch and HTTP bodies land in a
   server-side cache; the model pages through them with a `cacheId` instead of
@@ -133,7 +133,7 @@ entry 40 with one `cacheId` call instead of re-fetching the URL.
 | `github` | token optional |
 | `searxng` | none (endpoint-scoped) |
 | `brave` | **keyed, billed** |
-| `mojeek-free` | none, auto solve Altcha by plugin |
+| `mojeek` | none (Altcha-gated) / **keyed, billed** |
 
 See [Search engines](docs/search-engines.md) for more details.
 

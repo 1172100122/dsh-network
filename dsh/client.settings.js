@@ -48,6 +48,7 @@ window.__ModuleLoader__.load({
       github: 'https://api.github.com/search',
       brave: 'https://api.search.brave.com/res/v1/web/search',
       'mojeek-free': 'https://www.mojeek.com/search',
+      mojeek: 'https://www.mojeek.com/search',
       // SearXNG is deliberately NOT here: it is self-hosted, so its
       // endpoint must stay editable in the engine dialog (built-in engines
       // with a fixed endpoint get a locked input). The loopback default
@@ -60,7 +61,9 @@ window.__ModuleLoader__.load({
     // subscription — and, next to Mojeek's official paid Search API, as the
     // wrong product entirely (hence the `-free` id). A cookie that reached
     // the key map another way still works; the CLI resolves the same map.
-    var ENGINE_HAS_API_KEY = { bing: false, duckduckgo: false, baidu: false, so360: false, github: false, searxng: false, brave: true, 'mojeek-free': false }
+    // `mojeek` (the official Search API) DOES offer an API key field: every
+    // query is billed and `api_key=…` is the documented credential.
+    var ENGINE_HAS_API_KEY = { bing: false, duckduckgo: false, baidu: false, so360: false, github: false, searxng: false, brave: true, 'mojeek-free': false, mojeek: true }
     // GitHub engine: token / indexes / sort live inside the engine edit
     // dialog (config.githubToken / githubIndexes / githubSort), committed
     // through githubSettingsPatch() on save. Brave's key rides the generic
@@ -68,7 +71,7 @@ window.__ModuleLoader__.load({
     var GITHUB_INDEX_LABELS = { repositories: 'Repositories', code: 'Code', issues: 'Issues', users: 'Users' }
     var GITHUB_SORTS = ['best', 'stars', 'updated']
     /** Per-engine one-line description shown inside the edit dialog. */
-    var ENGINE_HINTS = { bing: 'engineHintBing', duckduckgo: 'engineHintDuckduckgo', baidu: 'engineHintBaidu', so360: 'so360Hint', github: 'githubHint', searxng: 'searxngHint', brave: 'braveHint', 'mojeek-free': 'mojeekHint' }
+    var ENGINE_HINTS = { bing: 'engineHintBing', duckduckgo: 'engineHintDuckduckgo', baidu: 'engineHintBaidu', so360: 'so360Hint', github: 'githubHint', searxng: 'searxngHint', brave: 'braveHint', 'mojeek-free': 'mojeekHint', mojeek: 'mojeekApiHint' }
 
     /** Build the github settings patch from a draft. The token is
      *  write-only: a non-empty typed value stores the key, the magic
