@@ -22,7 +22,15 @@
 以及看起来与应用其余部分并无二致的工具卡片。它接管官方 `tool-web` 的
 `web_search` / `web_fetch`, 换成一个常驻的本地回环 Node 进程。
 
-需要 `dsh 0.1.0.rc2` 或更高版本。
+需要 `dsh 0.1.0.rc2` 或更高版本。见 [需知事项](#需知事项)。
+
+## 快速安装
+
+```bash
+dsh plugin --profile web add @naivg/dsh-network
+```
+
+详见 [安装](#安装)。
 
 ## 为什么需要这个插件
 
@@ -99,7 +107,7 @@ DeepSeek Harness 自带 `web_search` 和 `web_fetch`, 覆盖了相当一部分�
 
 | 引擎 id | 凭据 |
 |---|---|
-| `deepseek-official` | DSH 原生配置与账户/凭据服务（可选，可能产生费用） |
+| `deepseek-official`(仅HOST) | DSH 原生配置与账户/凭据服务（可选，可能产生费用） |
 | `bing` | 无 |
 | `duckduckgo` | 无 |
 | `baidu` | 无 |
@@ -195,6 +203,14 @@ dsh web
   `.sh`/`.js`/`.bat`……)直接拒绝, 声明名和嗅探名都要过这一关;超过字节上限是
   **失败**而不是截断, 而且写入是原子的(`.part` → rename), 所以磁盘上存在的文件
   一定是完整的。
+
+## 需知事项
+
+我们正式支持 `dsh 0.1.0.rc2` 及更高版本。这是因为从该版本开始，API 已变得更加稳定。
+
+但有一个例外：原生 deepseek 搜索 API 函数使用 API （包含 DEEPSEEK_PROVIDER_ID、
+命名空间、Config 和 apply），该函数已通过 **DSH 0.0.1.rc3** 及更高版本进行了手
+动验证，因此本插件可能与较旧的 DSH 版本兼容。但我们不声明支持 0.1.0.rc2 之前的任何版本。
 
 ## 故障排查
 

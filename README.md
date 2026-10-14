@@ -23,7 +23,15 @@ web-search panel, and tool cards that render like first-party ones. It replaces
 the official `tool-web` `web_search` / `web_fetch` with a long-lived loopback
 Node process. 
 
-Requires `dsh 0.1.0.rc2` or later.
+Requires `dsh 0.1.0.rc2` or later. See [One thing to know](#one-thing-to-know).
+
+## Quick Install
+
+```bash
+dsh plugin --profile web add @naivg/dsh-network
+```
+
+See [Installation](#Install).
 
 ## Why this plugin
 
@@ -112,7 +120,7 @@ tool switches, GitHub) above the raw JSON.
 
 | Engine id | Credential |
 |---|---|
-| `deepseek-official` | DSH native account/credentials (optional; usage may be billed) |
+| `deepseek-official`(HOST ONLY) | DSH native account/credentials (optional; usage may be billed) |
 | `bing` | none |
 | `duckduckgo` | none |
 | `baidu` | none |
@@ -225,6 +233,16 @@ reference, including the loopback routes, is in
   the sniffed name. And a body over the byte cap **fails** instead of
   truncating, with an atomic `.part` → rename write, so a file that exists is a
   whole file.
+
+## One thing to know
+
+We officially support `dsh 0.1.0.rc2` and later. That's because the API has become 
+more stable since this version.
+
+But there is one exception: native deepseek search API function use API 
+(DEEPSEEK_PROVIDER_ID, namespace, Config, apply all present), which is manully verified 
+with **DSH 0.0.1.rc3** and later, so it might be compatible with older
+DSH versions. But we do not declare support for any versions prior to 0.1.0.rc2.
 
 ## Troubleshooting
 

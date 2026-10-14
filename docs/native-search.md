@@ -17,7 +17,10 @@ second Cordis or native provider into the profile to satisfy these peers.
 An already-polluted profile can take precedence over host fallback and needs
 its dependency conflicts resolved separately.
 
-This release does not claim compatibility with every older/newer host.
+This function use API (DEEPSEEK_PROVIDER_ID, namespace, Config, apply all present),
+which is verified with **DSH 0.0.1.rc3** and later, so it might be compatible with older
+DSH versions. But we do not declare support for any versions prior to 0.1.0.rc2.
+
 Optional peers do not waive DSH's version compatibility checks. Lazy loading
 keeps native dependencies out of CLI startup; unsupported or missing native
 capabilities return a diagnostic and can fall back to another engine.
