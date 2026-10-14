@@ -6,21 +6,19 @@
  * by tool-web's model-facing tools). Split out of index.js.
  */
 import { runCli } from './cli-runner.js'
+import { createSearchRunner } from './search.js'
 import { toSearchSources, renderSearchSourceItem } from './evidence.js'
 
-function makeSearchProvider(config) {
+function makeSearchProvider(config, runSearch = createSearchRunner(config)) {
   return {
     id: 'dsh-network',
     available: () => true,
     async search(request, signal) {
-      const args = ['search', '-q', request.query, '-t', String(60_000)]
-      if (typeof request.maxResults === 'number') {
-        args.push('--max-results', String(request.maxResults))
-      }
-      const entry = await runCli(args, signal, config)
+      const entry = await runSearch({ query: request.query, count: request.maxResults ?? config.searchMaxResults ?? 10 }, signal)
       const sources = toSearchSources(entry.items)
-      const truncated =
-        typeof request.maxResults === 'number' && sources.length >= request.maxResults
+      const truncated = typeof entry.truncated === 'boolean'
+        ? entry.truncated
+        : typeof request.maxResults === 'number' && sources.length >= request.maxResults
       // `content` is ONE query's own slice of the answer. dsh's tool-web
       // merges several queries into a single card: it wraps each query's
       // content in a `### <query>` heading and pools every query's sources

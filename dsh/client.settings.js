@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
     var GITHUB_INDEX_LABELS = { repositories: 'Repositories', code: 'Code', issues: 'Issues', users: 'Users' }
     var GITHUB_SORTS = ['best', 'stars', 'updated']
     /** Per-engine one-line description shown inside the edit dialog. */
-    var ENGINE_HINTS = { bing: 'engineHintBing', duckduckgo: 'engineHintDuckduckgo', baidu: 'engineHintBaidu', so360: 'so360Hint', github: 'githubHint', searxng: 'searxngHint', brave: 'braveHint', 'mojeek-free': 'mojeekHint', mojeek: 'mojeekApiHint', tavily: 'tavilyHint' }
+    var ENGINE_HINTS = { bing: 'engineHintBing', duckduckgo: 'engineHintDuckduckgo', baidu: 'engineHintBaidu', so360: 'so360Hint', github: 'githubHint', searxng: 'searxngHint', brave: 'braveHint', 'mojeek-free': 'mojeekHint', mojeek: 'mojeekApiHint', tavily: 'tavilyHint', 'deepseek-official': 'deepseekNativeHint' }
 
     /** Build the github settings patch from a draft. The token is
      *  write-only: a non-empty typed value stores the key, the magic
@@ -155,6 +155,11 @@ window.__ModuleLoader__.load({
     function IconEdit(react) {
       return react.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' },
         react.createElement('path', { d: 'M11.5 1.5l3 3-9 9H2.5v-3l9-9z' }))
+    }
+    function IconInfo(react) {
+      return react.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', 'aria-hidden': true },
+        react.createElement('circle', { cx: 8, cy: 8, r: 6 }),
+        react.createElement('path', { d: 'M8 7v4M8 4.5v.5' }))
     }
     function IconTrash(react) {
       return react.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' },
@@ -282,6 +287,8 @@ window.__ModuleLoader__.load({
       var addDlg = addDialogState[0], setAddDlg = addDialogState[1]
 
       function openEngineDialog(id) {
+        // Native credentials and options belong to DSH, never this editor.
+        if (id === 'deepseek-official') { setDlg({ id: id }); return }
         var cfg = configs[id] || {}
         var next = {
           id: id,
@@ -300,6 +307,7 @@ window.__ModuleLoader__.load({
       function commitEngineDialog() {
         if (!dlg) return
         var id = dlg.id
+        if (id === 'deepseek-official') { closeEngineDialog(); return }
         var nextConfigs = Object.assign({}, configs)
         var entry = {
           endpoint: dlg.endpoint,
@@ -382,12 +390,14 @@ window.__ModuleLoader__.load({
         var needsKey = !!ENGINE_HAS_API_KEY[id]
         var hasKey = !!cfg.hasApiKey
         var canDelete = engines.length > 1
+        var isNative = id === 'deepseek-official'
+        var editLabel = isNative ? t.enginesInfo : t.enginesEdit
 
         return h('div', {
           key: id,
           style: Object.assign({}, STYLES.engineRow, index === engines.length - 1 ? STYLES.engineRowLast : null),
         },
-          h('span', { style: STYLES.engineCategoryText }, id),
+          h('span', { style: STYLES.engineCategoryText }, isNative ? ENGINE_LABELS[id] : id),
           id === 'github'
             ? h('span', { style: STYLES.engineTokenBadge(hasGithubToken ? 'ok' : 'error') },
               hasGithubToken ? t.githubTokenRowOn : t.githubTokenRowOff)
@@ -400,12 +410,12 @@ window.__ModuleLoader__.load({
             moveButton(id, index, -1),
             moveButton(id, index, 1),
             h('button', {
-              type: 'button', title: t.enginesEdit, 'aria-label': t.enginesEdit + ': ' + id,
+              type: 'button', title: editLabel, 'aria-label': editLabel + ': ' + id,
               onClick: function () { openEngineDialog(id) },
               style: STYLES.iconBtn,
               onMouseEnter: function (e) { Object.assign(e.currentTarget.style, STYLES.iconBtnHover) },
               onMouseLeave: function (e) { Object.assign(e.currentTarget.style, STYLES.iconBtn) },
-            }, IconEdit(react)),
+            }, isNative ? IconInfo(react) : IconEdit(react)),
             h('button', {
               type: 'button', title: t.enginesDelete, 'aria-label': t.enginesDelete + ': ' + id,
               disabled: !canDelete,
@@ -690,6 +700,8 @@ window.__ModuleLoader__.load({
       var id = value.id
       var isBuiltin = Object.prototype.hasOwnProperty.call(ENGINE_DEFAULT_ENDPOINTS, id)
       var isGithub = id === 'github'
+      var isNative = id === 'deepseek-official'
+      var dialogTitle = isNative ? t.enginesInfo : t.enginesEdit
       var hintKey = ENGINE_HINTS[id]
       var needsKey = !!ENGINE_HAS_API_KEY[id]
       var setField = function (key, v) { onChange(Object.assign({}, value, { [key]: v })) }
@@ -803,7 +815,7 @@ window.__ModuleLoader__.load({
       ) : null
 
       return h('div', {
-        role: 'dialog', 'aria-modal': 'true', 'aria-label': t.enginesEdit,
+        role: 'dialog', 'aria-modal': 'true', 'aria-label': dialogTitle,
         onClick: function (e) { if (e.target === e.currentTarget) onCancel() },
         style: {
           position: 'fixed', inset: 0, zIndex: 100,
@@ -830,7 +842,7 @@ window.__ModuleLoader__.load({
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             },
           },
-            h('h3', { style: { margin: 0, fontSize: '15px', fontWeight: 700 } }, t.enginesEdit),
+            h('h3', { style: { margin: 0, fontSize: '15px', fontWeight: 700 } }, dialogTitle),
             h('button', {
               type: 'button', onClick: onCancel,
               style: { appearance: 'none', border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '13px' },
@@ -842,7 +854,7 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
               h('span', { style: labelSmall }, t.enginesCategory),
               h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                h('input', {
+                isNative ? h('span', { style: labelSmall }, ENGINE_LABELS[id]) : h('input', {
                   value: ENGINE_LABELS[id] || id,
                   readOnly: true,
                   style: { ...inputStyle, color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))' },
@@ -859,7 +871,7 @@ window.__ModuleLoader__.load({
               ),
               hintKey ? h('span', { style: hintSmall }, t[hintKey]) : null,
             ),
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+            isNative ? null : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
               h('span', { style: labelSmall }, t.enginesEditEndpoint),
               isBuiltin
                 ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
@@ -897,7 +909,7 @@ window.__ModuleLoader__.load({
               ),
             ) : null,
             githubBlock,
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+            isNative ? null : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
               h('span', { style: labelSmall }, t.enginesEditOptions),
               h('textarea', {
                 rows: 3, value: optsText, onChange: function (e) { setOptionsText(e.target.value) },
@@ -915,8 +927,8 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button', onClick: onCancel,
               style: { appearance: 'none', border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))', background: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.05))', color: 'inherit', padding: '6px 12px', borderRadius: '8px', font: 'inherit', fontSize: '12px', fontWeight: 600, cursor: 'pointer' },
-            }, t.enginesEditCancel),
-            h('button', {
+            }, isNative ? t.enginesEditClose : t.enginesEditCancel),
+            isNative ? null : h('button', {
               type: 'button', onClick: onSave,
               style: { appearance: 'none', border: '1px solid transparent', background: 'var(--dsw-alias-brand-primary, #2563eb)', color: 'white', padding: '6px 14px', borderRadius: '8px', font: 'inherit', fontSize: '12px', fontWeight: 600, cursor: 'pointer' },
             }, t.enginesEditSave),
@@ -1012,6 +1024,7 @@ window.__ModuleLoader__.load({
                 }, ENGINE_DEFAULT_ENDPOINTS[id] || ''),
               )
             }),
+            value.id === 'deepseek-official' ? h('span', { style: hintSmall }, t.deepseekNativeHint) : null,
             picked ? null : h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-state-error-primary, #dc2626)' } }, t.engineNoCategory),
           ),
           h('div', {
