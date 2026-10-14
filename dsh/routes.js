@@ -8,7 +8,8 @@
  * index.js.
  */
 import { savePersistedConfig, PERSIST_FILE } from './persist.js'
-import { getNetworkClient, runCli } from './cli-runner.js'
+import { getNetworkClient } from './cli-runner.js'
+import { createSearchRunner } from './search.js'
 import { summarize, applyCardSettings, isTrustedRequest } from './config-summary.js'
 
 // ─────────────────────────────── settings bridge ────────────────────────────
@@ -169,7 +170,7 @@ function registerHealthRoute(ctx) {
  * (`config.webSearchTool === false`) the route answers 403, so the
  * settings kill-switch also removes the panel's backend in real time.
  */
-function registerSearchRoute(ctx, config) {
+function registerSearchRoute(ctx, config, runSearch = createSearchRunner(config)) {
   if (typeof ctx.inject !== 'function') return
   ctx.inject(['webServer'], (scope) => {
     try {
@@ -236,17 +237,20 @@ function registerSearchRoute(ctx, config) {
             send(400, { error: 'count must be an integer in [1, 20]' })
             return
           }
-          const cliArgs = ['search', '-q', query, '--max-results', String(count), '-t', '55000']
-          if (engine !== '') cliArgs.push('--engine', engine.toLowerCase())
           const startedAt = Date.now()
+          const cancelled = new AbortController()
+          const cancel = () => { if (!res.writableEnded) cancelled.abort() }
+          req.once?.('aborted', cancel)
+          res.once?.('close', cancel)
           try {
-            // The engine chain itself is bounded by -t 55000; the outer
-            // signal only guards against a wedged server client.
-            const entry = await runCli(cliArgs, AbortSignal.timeout(70_000), config)
+            const signal = AbortSignal.any([cancelled.signal, AbortSignal.timeout(60_000)])
+            const entry = await runSearch({ query, count, engine }, signal)
+            if (cancelled.signal.aborted) return
             send(200, {
               query,
               status: entry.status,
               engine: entry.engine,
+              truncated: entry.truncated === true,
               summary: entry.summary,
               items: Array.isArray(entry.items) ? entry.items : [],
               uncertainty: Array.isArray(entry.uncertainty) ? entry.uncertainty : [],
@@ -255,11 +259,15 @@ function registerSearchRoute(ctx, config) {
               elapsedMs: Date.now() - startedAt,
             })
           } catch (error) {
+            if (cancelled.signal.aborted) return
             send(502, {
               query,
               error: String(error && error.message ? error.message : error),
               elapsedMs: Date.now() - startedAt,
             })
+          } finally {
+            req.removeListener?.('aborted', cancel)
+            res.removeListener?.('close', cancel)
           }
         },
       })

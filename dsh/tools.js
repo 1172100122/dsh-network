@@ -9,6 +9,7 @@
  */
 import { savePersistedConfig, PERSIST_FILE } from './persist.js'
 import { runCli, runCliSoft } from './cli-runner.js'
+import { createSearchRunner } from './search.js'
 import {
   SEARCH_OUTPUT_SCHEMA,
   FETCH_OUTPUT_SCHEMA,
@@ -36,8 +37,8 @@ import {
 import { summarizeForModel, applyCardSettings } from './config-summary.js'
 
 // ─────────────────────────────── model-facing tools ────────────────────────────
-function registerWebSearchTool(ctx, config) {
-  const knownEngines = Array.isArray(config.searchEngines) ? config.searchEngines : ['bing', 'duckduckgo', 'baidu']
+function registerWebSearchTool(ctx, config, runSearch = createSearchRunner(config)) {
+  const knownEngines = Array.from(new Set(['deepseek-official', 'bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek', 'tavily', ...(Array.isArray(config.searchEngines) ? config.searchEngines : [])]))
   ctx.tools.register({
     name: 'web_search',
     description:
@@ -66,7 +67,7 @@ function registerWebSearchTool(ctx, config) {
         status: value.status,
         engine: value.engine,
         sources: toSearchSources(value.items),
-        truncated: false,
+        truncated: value.truncated === true,
         // dsh-network extras that the native web card doesn't model —
         // consumed by the dedicated block renderer in `dsh/client.js`.
         uncertainty: value.uncertainty,
@@ -116,14 +117,11 @@ function registerWebSearchTool(ctx, config) {
       if (!Number.isInteger(count) || count < 1 || count > 20) {
         throw new Error('web_search: count must be an integer in [1, 20]')
       }
-      const cliArgs = ['search', '-q', query, '--max-results', String(count), '-t', '55000']
-      if (typeof args.engine === 'string' && args.engine.trim() !== '') {
-        cliArgs.push('--engine', args.engine.trim().toLowerCase())
-      }
-      const entry = await runCli(cliArgs, exec.signal, config)
+      const entry = await runSearch({ query, count, engine: args.engine }, exec.signal)
       return {
         status: entry.status,
         engine: entry.engine,
+        truncated: entry.truncated === true,
         summary: entry.summary,
         items: Array.isArray(entry.items) ? entry.items : [],
         uncertainty: Array.isArray(entry.uncertainty) ? entry.uncertainty : [],

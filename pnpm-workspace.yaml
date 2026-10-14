@@ -4,3 +4,7 @@
 allowBuilds:
   esbuild: true
   tesseract.js: true
+
+# Native DSH runtime packages are host-provided optional peers. Development
+# installs must not silently introduce another host/Cordis dependency graph.
+autoInstallPeers: false

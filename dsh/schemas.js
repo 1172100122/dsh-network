@@ -25,6 +25,7 @@ const SEARCH_OUTPUT_SCHEMA = {
   properties: {
     status: { type: 'string', enum: ['ok', 'degraded', 'unavailable'] },
     engine: { type: 'string' },
+    truncated: { type: 'boolean' },
     summary: { type: 'string' },
     items: {
       type: 'array',
@@ -36,6 +37,7 @@ const SEARCH_OUTPUT_SCHEMA = {
           url: { type: 'string' },
           title: { type: 'string' },
           snippet: { type: 'string' },
+          published_at: { type: 'string' },
         },
       },
     },
@@ -314,7 +316,7 @@ const WEB_CONFIG_PATCH_SCHEMA = {
     searchEngines: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Search-engine chain order; one of bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free, mojeek, tavily.',
+      description: 'Search-engine chain order; one of bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free, mojeek, tavily, deepseek-official (DSH host only).',
     },
     searchEngineConfigs: {
       type: 'object',
