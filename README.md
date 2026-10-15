@@ -21,7 +21,7 @@ Let DeepSeek Harness access the internet seamlessly.
 (plus an opt-in downloader), a **Network** settings section, a sidebar
 web-search panel, and tool cards that render like first-party ones. It replaces
 the official `tool-web` `web_search` / `web_fetch` with a long-lived loopback
-Node process. 
+Node process. It's also ready to use right out of the box.
 
 Requires `dsh 0.1.0.rc2` or later. See [One thing to know](#one-thing-to-know).
 

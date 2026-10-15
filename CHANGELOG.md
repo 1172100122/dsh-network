@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 as far as the public npm surface (`@naivg/dsh-network`) is concerned.
 
-## [Unreleased]
+## [1.4.0] - 2026-10-15
 
 ### Added
 
@@ -197,3 +197,4 @@ order. Pre-release versions are not independently tagged.
 ---
 
 [1.3.0]: https://github.com/NaivG/dsh-network/releases/tag/v1.3.0
+[1.4.0]: https://github.com/NaivG/dsh-network/releases/tag/v1.4.0
