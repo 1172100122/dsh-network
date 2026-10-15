@@ -1552,8 +1552,10 @@ async function runSitemap(flags: CliFlags): Promise<SitemapEntry> {
     entries: entries.map(summarize),
     resolved,
     digest: flags.sitemapDigest ? renderPromptDigest({
+      query: flags.query,
       category: flags.sitemapCategory,
       minPriority: flags.sitemapMinPriority,
+      limit,
     }) : undefined,
     uncertainty,
     warnings,

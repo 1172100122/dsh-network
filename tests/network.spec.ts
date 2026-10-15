@@ -88,6 +88,7 @@ import {
   findByDomain,
   findByKey,
   listByCategory,
+  matchSitemap,
   renderPromptDigest,
   searchSitemap,
   snapshot,
@@ -2041,5 +2042,37 @@ describe('web_sitemap table', () => {
     const md = renderPromptDigest({ minPriority: 9 })
     expect(md).toMatch(/^# /m)
     expect(md.split('\n').filter((l) => l.startsWith('- ')).length).toBeGreaterThan(5)
+  })
+
+  it('renderPromptDigest honors a free-text query (regression: --digest ignored `-q`)', () => {
+    // Whole-catalog digest (no query, no cap) — legacy "--digest" alone path.
+    const full = renderPromptDigest()
+    const fullRows = full.split('\n').filter((l) => l.startsWith('- '))
+    expect(fullRows.length).toBe(WEB_SITEMAP.length)
+
+    // Query-scoped digest MUST share `searchSitemap`'s match scope; otherwise
+    // the model would paste 178 unrelated entries over a focused "github"
+    // question. (Digest renders in category order; the match list is in
+    // score order — compare as SETS, not sequences.)
+    const focused = renderPromptDigest({ query: 'github' })
+    const focusedDomains = new Set(
+      focused.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.split(' ')[1]!),
+    )
+    const expected = new Set(matchSitemap('github').map((e) => e.domain))
+    expect(focusedDomains).toEqual(expected)
+    expect(focusedDomains.size).toBeGreaterThan(0)
+    expect(focusedDomains.size).toBeLessThan(fullRows.length)
+    // Sanity: github/related hits actually surface; unrelated ones do not.
+    expect(focusedDomains.has('github.com')).toBe(true)
+    expect(focusedDomains.has('wikipedia.org')).toBe(false)
+  })
+
+  it('renderPromptDigest honors an explicit limit when query is set', () => {
+    const five = renderPromptDigest({ query: 'rust', limit: 3 })
+    const rows = five.split('\n').filter((l) => l.startsWith('- '))
+    expect(rows.length).toBeLessThanOrEqual(3)
+    const expected = new Set(matchSitemap('rust', { limit: 3 }).map((e) => e.domain))
+    const got = new Set(rows.map((l) => l.split(' ')[1]!))
+    expect(got).toEqual(expected)
   })
 })
