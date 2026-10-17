@@ -293,6 +293,14 @@ binary and the sidebar panel id.
   credential chain** — if you rename an env var or a dialog field, those
   two specs are what hold the four hops together.
 
+## Host web-tool compatibility
+
+Run `pnpm test:web-host` with `DSH_HOST_INSTALL_ANCHOR` to test the installed
+official search/fetch tools over the plugin's providers. This optional test
+uses synthetic searches and a loopback origin, with no API keys or external
+requests. See [Web tool compatibility](web-tool-compatibility.md) for the two
+tool schemas, Desktop preset scoping, and long-page continuation behavior.
+
 ## Real-network testing etiquette
 
 Real end-to-end runs cost public-engine budget — ask before bulk. The Brave

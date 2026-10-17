@@ -7,10 +7,12 @@ an auxiliary model request and may be billed under the user's DeepSeek plan.
 
 ## Supported installation
 
-The integration is verified against **DSH 0.2.0-rc.2**, official Git tag
-`dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`). The package
-has optional peers for `@deepseek-ai/dsh-web` and
-`@deepseek-ai/dsh-web-search-deepseek` at that exact version. They are **not**
+The integration was originally verified against **DSH 0.2.0-rc.2**, official Git tag
+`dsh-v0.2.0-rc.2` (`639ed015397290b3745d163aafe02ffee4aa3f84`). It also passes
+the native-host integration smoke against the installed **Windows Desktop
+0.2.1-rc.2** packages. The package declares optional peers for
+`@deepseek-ai/dsh-web` and `@deepseek-ai/dsh-web-search-deepseek` with the range
+`>=0.0.1-rc.3`; that range is not a claim that every host version was tested. They are **not**
 bundled dependencies. DSH's runtime package resolver supplies its own copies,
 including Cordis 4.0.4, to installed and linked plugins. Do not install a
 second Cordis or native provider into the profile to satisfy these peers.
@@ -95,3 +97,7 @@ search. It covers package identity, isolated service lifetime, official result
 mapping, configuration updates, concurrency, account/credential routing,
 audit, cancellation, and missing dependencies. Without the anchor it reports
 a skip. A real logged-in DSH/browser session and billing were not tested.
+
+For the official model-facing search/fetch tools over the dsh-network providers,
+see [Web tool compatibility](web-tool-compatibility.md) and run `pnpm test:web-host`
+with the same install anchor.
