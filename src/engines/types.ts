@@ -39,20 +39,75 @@ export interface SearchSource {
 }
 
 /**
+ * Normalize one engine id: trim + lowercase. Every id boundary goes through
+ * this — a registry id, a chain entry written by hand into a config file, a
+ * key-map key and a `--engine` flag all have to land on the same string, or
+ * the engine resolves under one spelling and silently not under another.
+ */
+export function normalizeEngineId(id: string): string {
+  return String(id ?? '').trim().toLowerCase()
+}
+
+/**
+ * Normalize a whole id list, dropping blanks and duplicates. Engine ids are
+ * case-insensitive at the boundary but exact in the registry, so
+ * `['bing', 'Bing']` would otherwise resolve to the SAME engine twice and
+ * fire two searches at a rate-limited host.
+ */
+export function normalizeEngineIds(ids: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of ids) {
+    const id = normalizeEngineId(raw)
+    if (id === '' || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/**
  * Env knobs the CLI reads for the keyed engines, paired with HOW the
  * credential rides on a request. Declaring it on the engine keeps the
- * per-provider quirk (Brave's `X-Subscription-Token` vs a Bearer token)
- * inside the engine while the CLI stays the only actor that ever holds the
- * secret — the engine sees `options.hasApiKey`, never the key itself.
+ * per-provider quirk (Brave's `X-Subscription-Token` vs a Bearer token, or
+ * Mojeek's billed Search API riding the key inside the URL) inside the engine
+ * while the CLI stays the only actor that ever holds the secret — the engine
+ * sees `options.hasApiKey`, never the key itself.
  *
  * Engines WITHOUT an `auth` block are the keyless HTML scrapers, whose
  * reachability is checked by fetching rather than by a token.
  */
 export interface EngineAuth {
-  /** Header the credential travels in (case-insensitive on the wire). */
-  readonly header: string
+  /**
+   * Where the credential rides on the wire. Defaults to `header`: the same
+   * shape every existing engine (Brave, Mojeek's `chllg` cookie) has always
+   * used.
+   *
+   *   `header` — value goes into a request header named `header` (see below).
+   *   `query`  — value goes into a URL query parameter named `queryName`
+   *              (Brave has no instance of this; Mojeek's official Search API
+   *              is the first — it requires `?api_key=…`).
+   *
+   * Engines that read a `query` credential see the value in
+   * `buildRequestOptions(engine, …).apiKey` (the CLI never lets a header-mode
+   * engine see it) and compose the URL themselves; the CLI never strips it
+   * from the response cache key path either, because every `query`-mode
+   * engine declares `in` and the URL it builds already carries the parameter.
+   */
+  readonly in?: 'header' | 'query'
+  /**
+   * Header the credential travels in (case-insensitive on the wire). Required
+   * when `in === 'header'`; omitted by `in === 'query'` engines (the key rides
+   * in the URL instead).
+   */
+  readonly header?: string
   /** Header value format: `raw` (default) or `bearer` (prepends `Bearer `). */
   readonly scheme?: 'raw' | 'bearer'
+  /**
+   * Query parameter name used when `in === 'query'`. Defaults to `api_key`
+   * (the convention Mojeek's billed Search API follows). Ignored otherwise.
+   */
+  readonly queryName?: string
   /**
    * Env var the CLI resolves the key from. `DSH_NETWORK_SEARCH_ENGINE_API_KEYS`
    * (a JSON `{ engineId: key }` map the host builds per invoke) is always
@@ -60,6 +115,32 @@ export interface EngineAuth {
    * by hand, so `dsh-network search --engine brave` works standalone.
    */
   readonly apiKeyEnv: string
+  /**
+   * When true, a missing key is NOT a fatal gate for this engine — the CLI
+   * still sends the request, just with `fallbackHeader` instead of the real
+   * auth header. Tavily's documented keyless Search mode is the only current
+   * instance: rate-limited but functional, so the engine degrades gracefully
+   * instead of returning synthetic 401s.
+   *
+   * Optional-key engines never go through the "no credential" short-circuit
+   * (`authBlocked` in `runSearch`), and `authFor` returns `fallbackHeader`
+   * when the key is empty. With `optional: true` but no `fallbackHeader` set,
+   * the request ships without authentication — the engine is still allowed to
+   * be reached, it just isn't authorized to do anything useful. Default false
+   * preserves Brave's behavior on every existing path.
+   */
+  readonly optional?: boolean
+  /**
+   * Header to inject when the key is missing AND `optional: true`. The shape
+   * is a static `{ name, value }` pair — not a template, not a function —
+   * because the value is always a constant the engine knows (e.g. `keyless`).
+   * If the engine needs a keyless header that depends on the call, drop
+   * `optional` and emit the header itself through `buildRequests()` instead.
+   */
+  readonly fallbackHeader?: {
+    readonly name: string
+    readonly value: string
+  }
 }
 
 /**
@@ -72,6 +153,17 @@ export interface EngineRequest {
   key: string
   /** Absolute URL to fetch. */
   url: string
+  /** HTTP method (defaults to `GET`). POST is the only known non-GET form
+   *  today — Tavily's `/search` is JSON-over-POST. */
+  method?: string
+  /** Request body (text, JSON-stringified). When set, `runClientFetch`
+   *  POSTs the bytes at `runClientFetch` time. Empty string is treated as
+   *  "no body" (the engine omits the field entirely). */
+  body?: string
+  /** Content-Type override. When absent the CLI infers one (and the
+   *  default Accept stays on the headers). The engine layer fills JSON
+   *  shapes by writing `application/json` itself. */
+  contentType?: string
   /** Optional per-request header overrides (merged over defaultHeaders). */
   headers?: Record<string, string>
   /**
@@ -307,6 +399,9 @@ export function composeEngineUrl(endpoint: string, primaryKey: string, primaryVa
  * so a user can target `country=DE` / `freshness=pw` at one engine without
  * a schema change or a CLI restart. Pure, sync, never throws: a malformed
  * value degrades to "no options", exactly like an unset one.
+ *
+ * The id is normalized on BOTH sides of the lookup, so a hand-written
+ * `DSH_NETWORK_ENGINE_OPTIONS` finds its engine whatever case its key uses.
  */
 export function readEngineEnvOptions(
   engineId: string,
@@ -321,7 +416,9 @@ export function readEngineEnvOptions(
     return {}
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-  const perEngine = (parsed as Record<string, unknown>)[engineId]
+  const map = parsed as Record<string, unknown>
+  const target = normalizeEngineId(engineId)
+  const perEngine = map[target] ?? Object.entries(map).find(([key]) => normalizeEngineId(key) === target)?.[1]
   if (!perEngine || typeof perEngine !== 'object' || Array.isArray(perEngine)) return {}
   return perEngine as Record<string, unknown>
 }

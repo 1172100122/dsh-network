@@ -72,7 +72,7 @@ empty; `githubSort` defaults to `"best"`; `allowConfigEdit` defaults to
 | `httpTimeoutMs` | Per-call timeout for `http_request`. | `25000` |
 | `maxBodyChars` | Largest response body accepted. | `3000000` |
 | `maxRedirects` | Redirect hop budget. | `3` |
-| `searchEngines` | Live engine chain, tried in order. | `['bing','duckduckgo','baidu']` |
+| `searchEngines` | Live engine chain, tried in order. Ids are trimmed and lowercased on load, duplicates dropped. | `['bing','duckduckgo','baidu']` |
 | `searchMaxResults` | Result cap handed to engines (hard cap 20). | `10` |
 | `webSearchTool` | Enables the `web_search` tool AND the sidebar search route. | `true` |
 | `webFetchTool` | Enables the `web_fetch` tool. | `true` |
@@ -112,9 +112,14 @@ used. Two further properties come with the gate:
 
 ## Engines
 
-The default chain is **Bing → DuckDuckGo → Baidu**. Three more engines are
+The default chain is **Bing → DuckDuckGo → Baidu**. Four more engines are
 available, all opt-in, and they need nothing beyond the fields above:
 
+- **360搜索 (`so360`)** — keyless Chinese index at `https://www.so.com/s`. No
+  credential to configure. It is opt-in because 360 rate-limits by source IP.
+  360 does not bind that to the request source. Also Chinese-index-first, and a
+  page yields only 5-7 organic hits. See
+  [search-engines.md](search-engines.md#360搜索-so360).
 - **GitHub** — hybrid REST search over repositories / code / issues / users,
   fused by RRF. Anonymous search is limited to 10 req/min per IP; a token
   raises the quota and enables the code index. Configure it in the
@@ -129,6 +134,16 @@ available, all opt-in, and they need nothing beyond the fields above:
   Paste the subscription token in the engine dialog, then add `brave` to
   `searchEngines` (or pin it per call). Without a key, no request is sent at
   all.
+- **Mojeek (free)** — Mojeek's own index, behind an Altcha proof-of-work. Not
+  Mojeek's official Search API: the credential here is a ~30-day cookie, 
+  and the plugin's persistent server obtains it by itself on the first
+  search, so there is nothing to configure and no key field in the dialog.
+  Add `mojeek-free` to `searchEngines` and it works. Outside the host (a
+  standalone CLI run) run `npx @naivg/dsh-network mojeek-login` and export the
+  cookie as `DSH_NETWORK_MOJEEK_COOKIE`.
+  Rate-gated by IP (bursts get a 403 for a few minutes) and
+  English-heavy, so it belongs at the tail of the chain — see
+  [search-engines.md](search-engines.md#mojeek-free).
 
 The dialogs, the full per-engine option tables (`country`, `freshness`,
 `categories`, `pageno`, …), and how credentials are stored and resolved live in
@@ -143,6 +158,7 @@ The dialogs, the full per-engine option tables (`country`, `freshness`,
 | `DSH_NETWORK_SEARXNG_URL` | CLI | SearXNG endpoint (default `http://127.0.0.1:8888`). |
 | `DSH_NETWORK_GITHUB_TOKEN` | CLI | Legacy GitHub credential channel (still honored after the engine API-key map). |
 | `DSH_NETWORK_BRAVE_API_KEY` | CLI | Standalone Brave key for a single-shot CLI run outside the host. |
+| `DSH_NETWORK_MOJEEK_COOKIE` | CLI | Standalone `mojeek-free` `chllg=…` cookie for a single-shot CLI run outside the host (`mojeek-login` prints it). |
 | `DSH_NETWORK_SEARCH_ENGINE_API_KEYS` | CLI | JSON map `{ engineId: key }` the host packs into every `/invoke` env snapshot. Not meant to be set by hand. |
 | `DSH_NETWORK_ENGINE_OPTIONS` | CLI | JSON map `{ engineId: { … } }` of per-engine options from the settings dialog's `key=value` textarea. |
 | `DSH_TOOLS_PATH` | tests only | Helps `tests/schema-check.mjs` locate the dsh-tools package. |

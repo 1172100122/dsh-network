@@ -91,6 +91,22 @@ describe('host search dispatcher', () => {
     expect(JSON.stringify(result)).not.toContain('secret')
   })
 
+  it.each(['so360', 'mojeek-free', 'mojeek', 'tavily'])('preserves upstream %s in native fallback and CLI-only chains', async (id) => {
+    const nativeSearch = vi.fn().mockRejectedValue(new Error('fixture failure'))
+    const runCli = vi.fn().mockResolvedValue(cliResult(id))
+    const config = { searchEngines: [nativeId, id] }
+    const search = createSearchRunner(config, { nativeSearch, runCli })
+    expect(await search({ query: 'fixture' })).toMatchObject({ status: 'ok', engine: id })
+    expect(pinned(runCli.mock.calls[0]![0])).toBe(id)
+    expect(runCli.mock.calls[0]![2].searchEngines).toEqual([id])
+    runCli.mockClear()
+    nativeSearch.mockClear()
+    config.searchEngines = [id, 'bing']
+    await search({ query: 'fixture' })
+    expect(runCli.mock.calls[0]![0]).not.toContain('--engine')
+    expect(nativeSearch).not.toHaveBeenCalled()
+  })
+
   it('stops at a CLI success before reaching native search', async () => {
     const nativeSearch = vi.fn()
     const runCli = vi.fn().mockResolvedValue(cliResult('bing'))

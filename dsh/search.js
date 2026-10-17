@@ -8,7 +8,7 @@ import { runCli as defaultRunCli } from './cli-runner.js'
 const NATIVE_ENGINE_ID = 'deepseek-official'
 // Keep the legacy one-invoke path only for a wholly known CLI chain. The
 // CLI's chain resolver otherwise drops unknown IDs and can select a default.
-const CLI_ENGINE_IDS = ['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave']
+const CLI_ENGINE_IDS = ['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek', 'tavily']
 const DEFAULT_CHAIN = ['bing', 'duckduckgo', 'baidu']
 
 function codedError(code, message) {

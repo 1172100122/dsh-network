@@ -44,22 +44,39 @@ window.__ModuleLoader__.load({
       bing: 'https://www.bing.com/search',
       duckduckgo: 'https://html.duckduckgo.com/html',
       baidu: 'https://www.baidu.com/s',
+      so360: 'https://www.so.com/s',
       github: 'https://api.github.com/search',
       brave: 'https://api.search.brave.com/res/v1/web/search',
+      'mojeek-free': 'https://www.mojeek.com/search',
+      mojeek: 'https://www.mojeek.com/search',
+      tavily: 'https://api.tavily.com/search',
       // SearXNG is deliberately NOT here: it is self-hosted, so its
       // endpoint must stay editable in the engine dialog (built-in engines
       // with a fixed endpoint get a locked input). The loopback default
       // lives in the host's defaultConfig seed.
     }
-    var ENGINE_HAS_API_KEY = { bing: false, duckduckgo: false, baidu: false, github: false, searxng: false, brave: true }
+    // Which engines offer a key field in the edit dialog. `mojeek-free` is
+    // deliberately FALSE: it authenticates with a chllg cookie that the
+    // persistent server solves by itself on the first search, so there is
+    // nothing to paste. Rendering "API Key" for it read as a missing
+    // subscription — and, next to Mojeek's official paid Search API, as the
+    // wrong product entirely (hence the `-free` id). A cookie that reached
+    // the key map another way still works; the CLI resolves the same map.
+    // `mojeek` (the official Search API) DOES offer an API key field: every
+    // query is billed and `api_key=…` is the documented credential.
+    var ENGINE_HAS_API_KEY = { bing: false, duckduckgo: false, baidu: false, so360: false, github: false, searxng: false, brave: true, 'mojeek-free': false, mojeek: true, tavily: true }
     // GitHub engine: token / indexes / sort live inside the engine edit
     // dialog (config.githubToken / githubIndexes / githubSort), committed
-    // through githubSettingsPatch() on save. Brave's key rides the generic
-    // `searchEngineConfigs[id].apiKey` path (see the needsKey block below).
+    // through githubSettingsPatch() on save. Brave / Tavily keys ride the
+    // generic `searchEngineConfigs[id].apiKey` path (see the needsKey block
+    // below). Tavily supports a documented keyless mode when no key is set,
+    // so the dialog DOES offer a key field (rate-limited tier still works
+    // and a stored key removes the rate limit) — the badge reflects the
+    // stored map, just like Brave.
     var GITHUB_INDEX_LABELS = { repositories: 'Repositories', code: 'Code', issues: 'Issues', users: 'Users' }
     var GITHUB_SORTS = ['best', 'stars', 'updated']
     /** Per-engine one-line description shown inside the edit dialog. */
-    var ENGINE_HINTS = { bing: 'engineHintBing', duckduckgo: 'engineHintDuckduckgo', baidu: 'engineHintBaidu', github: 'githubHint', searxng: 'searxngHint', brave: 'braveHint', 'deepseek-official': 'deepseekNativeHint' }
+    var ENGINE_HINTS = { bing: 'engineHintBing', duckduckgo: 'engineHintDuckduckgo', baidu: 'engineHintBaidu', so360: 'so360Hint', github: 'githubHint', searxng: 'searxngHint', brave: 'braveHint', 'mojeek-free': 'mojeekHint', mojeek: 'mojeekApiHint', tavily: 'tavilyHint', 'deepseek-official': 'deepseekNativeHint' }
 
     /** Build the github settings patch from a draft. The token is
      *  write-only: a non-empty typed value stores the key, the magic

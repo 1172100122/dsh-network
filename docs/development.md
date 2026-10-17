@@ -153,12 +153,16 @@ dsh-network/
 │   ├── html-extract.ts         # HTML → visible text + links (raw helpers)
 │   ├── html.ts                 # HTML → Markdown (nav/footer pre-filter)
 │   ├── document.ts             # PDF/OOXML/ODF/EPUB → Markdown via officeparser
+│   ├── mojeek-login.ts         # Altcha PoW solver
+│   ├── mojeek-session.ts       # Per-server cookie cache
 │   ├── search-engines.ts       # BACKWARD-COMPAT shim → re-exports ./engines
 │   ├── config.ts               # CLI-side runtime config (env knobs)
 │   └── engines/                # registry + per-engine implementations
-│       ├── types.ts            # SearchEngine interface, registry, options reader
+│       ├── types.ts            # SearchEngine interface, registry, id normalization, options reader
 │       ├── header-profiles.ts  # Firefox-127 baseline + overlays
-│       ├── bing.ts / duckduckgo.ts / baidu.ts / github.ts / searxng.ts / brave.ts
+│       ├── bing.ts / duckduckgo.ts / baidu.ts / so360.ts / github.ts / searxng.ts / brave.ts
+│       ├── mojeek-free.ts      # HTML SERP + cookie credential + 403/challenge classification
+│       │                       # so360.ts: HTML SERP + the HTTP-200 CAPTCHA-wall classification
 │       └── index.ts            # barrel + registerDefaultEngines()
 ├── tests/                      # see "Test suite" above
 └── dist/                       # built artifacts (gitignored)

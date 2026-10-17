@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { configToEnv } from '../dsh/serverClient.js'
+import { defaultConfig } from '../dsh/config-summary.js'
 import { readEngineEnvOptions } from '../src/engines/types.ts'
 
 const KEYS_ENV = 'DSH_NETWORK_SEARCH_ENGINE_API_KEYS'
@@ -214,5 +215,61 @@ describe('summarize — a configured engine outside the chain still reports its 
   it('still reports chain engines and tolerates absent configs', () => {
     const view = summarize({ searchEngines: ['bing'] })
     expect(view.searchEngineConfigs).toEqual({})
+  })
+})
+
+/**
+ * `defaultConfig` is the single funnel every raw config passes through (cordis
+ * row config AND the persisted ~/.dsh/dsh-network.json snapshot), so an engine
+ * id is normalized here or nowhere. `SearchEngineRegistry.resolve` drops ids it
+ * does not know, so a half-normalized id — `Bing` from a hand-written config —
+ * would silently stop searching that engine: no error, just a smaller chain.
+ */
+describe('defaultConfig — engine ids land normalized', () => {
+  it('trims and lowercases the chain, the per-engine configs and the key map', () => {
+    const config = defaultConfig({
+      searchEngines: [' Bing ', 'mojeek-free'],
+      searchEngineConfigs: {
+        Bing: { options: { freshness: 'pw' } },
+        brave: { options: { country: 'DE' } },
+      },
+      searchEngineApiKeys: { Bing: 'not-a-real-key' },
+    })
+    expect(config.searchEngines).toEqual(['bing', 'mojeek-free'])
+    expect(config.searchEngineConfigs.bing.options).toEqual({ freshness: 'pw' })
+    expect(config.searchEngineApiKeys.bing).toBe('not-a-real-key')
+    // Untouched engines keep their settings verbatim.
+    expect(config.searchEngineConfigs.brave.options).toEqual({ country: 'DE' })
+  })
+
+  it('dedupes a chain holding one engine twice', () => {
+    const config = defaultConfig({ searchEngines: ['bing', 'Bing', 'mojeek-free'] })
+    expect(config.searchEngines).toEqual(['bing', 'mojeek-free'])
+  })
+
+  it('carries the normalized ids into the per-invoke env snapshot', () => {
+    const env = configToEnv(defaultConfig({
+      searchEngines: [' Bing ', 'mojeek-free'],
+      searchEngineApiKeys: { Bing: 'chllg=pair' },
+      searchEngineConfigs: { Bing: { options: { s: '21' } } },
+    }))
+    expect(env.DSH_NETWORK_SEARCH_ENGINES).toBe('bing,mojeek-free')
+    expect(JSON.parse(env[KEYS_ENV])).toEqual({ bing: 'chllg=pair' })
+    expect(JSON.parse(env[OPTIONS_ENV])).toEqual({ bing: { s: '21' } })
+  })
+})
+
+/**
+ * `readEngineEnvOptions` is the other end of that snapshot. The settings
+ * dialog writes the engine's own id, but a hand-written
+ * `DSH_NETWORK_ENGINE_OPTIONS` carries whatever spelling its author used, so
+ * the lookup normalizes both sides.
+ */
+describe('readEngineEnvOptions — id spelling does not matter', () => {
+  it('finds the slice whatever case the key uses', () => {
+    const env = { [OPTIONS_ENV]: JSON.stringify({ 'MOJEEK-FREE': { s: 21 } }) }
+    expect(readEngineEnvOptions('mojeek-free', env)).toEqual({ s: 21 })
+    expect(readEngineEnvOptions(' MOJEEK-FREE ', env)).toEqual({ s: 21 })
+    expect(readEngineEnvOptions('bing', env)).toEqual({})
   })
 })

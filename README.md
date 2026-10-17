@@ -17,67 +17,70 @@ Let DeepSeek Harness access the internet seamlessly.
 
 </div>
 
-`dsh-network` gives DeepSeek Harness a complete web toolkit — **five model-facing
-tools**, a **Network settings section**, a **sidebar web-search panel**, and
-tool-card renderers that already look like the rest of the app.
+`dsh-network` gives DeepSeek Harness a full web toolkit: five model-facing tools
+(plus an opt-in downloader), a **Network** settings section, a sidebar
+web-search panel, and tool cards that render like first-party ones. It replaces
+the official `tool-web` `web_search` / `web_fetch` with a long-lived loopback
+Node process. It's also ready to use right out of the box.
 
-It replaces the official `tool-web` `web_search` / `web_fetch` with a long-lived
-loopback Node process that talks to the web through `undici`. Oversized results
-page through a server-side cache, so the model reads past the inline cap
-instead of losing the tail. No API key is needed for the default search chain,
-and every opt-in engine stays opt-in.
+Requires `dsh 0.1.0.rc2` or later. See [One thing to know](#one-thing-to-know).
 
-Works with `dsh: 0.1.0.rc2` or later.
+## Quick Install
+
+```bash
+dsh plugin --profile web add @naivg/dsh-network
+```
+
+See [Installation](#Install).
 
 ## Why this plugin
 
-DeepSeek Harness ships `web_search` and `web_fetch`, and that covers a fair
-amount of ground until the model walks into one of these walls:
+DeepSeek Harness ships `web_search` and `web_fetch`, and they cover the ground
+until a long page returns cut off at the inline limit; a link to a `.pdf` or
+`.docx` hands the model binary bytes; a feed URL arrives as a wall of XML
+instead of a list of posts; a task that needs a raw `POST`, an authoritative
+portal lookup, or a file on disk has no tool at all. If the model needs to perform 
+specific tasks, it can only use external tools such as `curl` or `wget`, or write a 
+`tmp_xxx.py` script first(and there's no guarantee it will work right the first time).
 
-- Long pages come back cut off.
-- Direct links to documents are returned to the model in binary format.
-- A feed URL comes back as a wall of XML instead of a list of articles.
-- Two tools are not a web toolkit.
-- None of it is yours to inspect.
+The usual workaround is install a browser-automation plugin(e.g.`browser-use`): open 
+the page, snapshot the DOM or a screenshot, click, scroll, repeat. That is the 
+right instrument for a page that only works through interaction, and an **expensive**(really) 
+one for reading text. Every step pays for a fresh page snapshot plus the tokens 
+to read it, and the loop only moves as fast as the page renders, so one article 
+can cost many times the context of its own prose while most of those tokens go to
+navigation, banners and markup the reader never needed.
 
-`dsh-network` takes the `web` seam over and replaces that pair with a
-long-lived Node process:
-
-- **Multiple search engines** — Bing, DuckDuckGo, Baidu, tried in order by 
-  default. GitHub, SearXNG and Brave join when you want them.
-- **Nothing gets truncated.** Oversized fetch and HTTP bodies land in a
-  server-side cache; the model pages through them with a `cacheId` instead of
-  losing the tail.
-- **Five tools** — search, fetch, raw `http_request`, a curated portal lookup
-  (`web_sitemap`), and `web_config` for the live settings; plus `web_download`
-  for saving binary files, **off by default** (see [Settings](#settings)).
-- **Answers you can cite** — title, link, snippet and date per hit, plus an
-  explicit uncertainty note when the engines disagree.
-- **Documents and feeds arrive as Markdown.** PDF, Word, PowerPoint, Excel,
-  ODF and EPUB responses are parsed instead of handed over as bytes. RSS 2.0,
-  RSS 1.0 (RDF) and Atom 1.0 feeds render as one Markdown entry per item —
-  title, date, author, link and body — instead of a wall of XML tags.
-- **A settings section and a sidebar search panel**, so you can reorder the
-  chain, paste a key, and search yourself without editing a config file. Edits
-  land on the next tool call — no restart.
-- **Safety on by default** — per-redirect SSRF validation, IP pinning,
-  private-range blocking and a protocol lock, all in-process.
-- **Integrate It into Your App**: dsh-network was designed with the official CSS 
-  style in mind, so it renderers that already look like the rest of the app.
-
-The trade is one extra Node process, owned by the plugin, and the `web` seam
-stays claimed until you uninstall it.
+`dsh-network` was born to fill this gap. Documents and feeds arrive as
+parsed Markdown, one entry per feed item, and a body over the inline cap lands
+in a server-side cache the model can page through, so a long page is read in
+full rather than losing its tail. Search runs an engine chain (Bing →
+DuckDuckGo → Baidu by default, keyless) that can be pinned to one engine per
+call, and every hit carries a title, link, snippet and date; when the engines
+disagree, the answer says so instead of looking empty. `http_request`,
+`web_sitemap` and `web_config` cover the jobs the official pair had no tool
+for, the settings section and sidebar panel make all of it editable and usable
+by hand, and every request — including the opt-in downloader — goes through one
+fenced transport: per-redirect SSRF validation, IP pinning, private-range
+blocking and a protocol lock. The only cost is one extra Node process, owned by the
+plugin, and the `web` seam stays claimed until you uninstall it.
 
 ## What you get
 
 | Tool | What it does |
 |---|---|
-| `web_search` | Searches the web through the configured engine chain (default **Bing → DuckDuckGo → Baidu**). Returns citeable sources (title, link, snippet, date), a summary, a status flag, and uncertainty notes. One engine can be pinned per call. |
-| `web_fetch` | Fetches one HTTP(S) URL and returns Markdown by default or the raw body on request, with outgoing links and warnings. PDF, OOXML (`docx`/`pptx`/`xlsx`), ODF (`odt`/`odp`/`ods`), and EPUB responses are converted to clean Markdown instead of binary bytes. **RSS 2.0, RSS 1.0 (RDF) and Atom 1.0 feeds are recognized by their root element** — `<rss>`, `<feed>`, `<rdf:RDF>` — and rendered item by item, so a subscription reads as entries rather than raw XML ([details](docs/cli.md#feeds)). |
-| `http_request` | Issues a low-level HTTP(S) request with full method, header, and body control. |
-| `web_sitemap` | Looks up a curated table of **178** authoritative portals — 23 categories spanning arxiv, MDN, package registries, Q&A sites, government, news, video… — by domain, category, priority, or free-text query, optionally returning a paste-able digest. |
-| `web_config` | Reads the live dsh-network configuration, or applies a partial patch when you have enabled the safety toggle (see [Settings](#settings)). Full behaviour: [configuration.md](docs/configuration.md#web_config-tool-and-the-safety-toggle). |
-| `web_download` | **Off by default** — turn it on under Settings → 网络 → 工具 and the model can save a binary file (image, archive, media, font) to disk and get its path back. It runs on the *same* transport as every other tool — same allowlist, same per-hop private-range block, same same-domain redirect lock — because the alternative is the model reaching for `curl`, and one injected page is enough to aim that at `169.254.169.254`. The extension comes from the payload rather than the URL (a `.png` that is really an HTML anti-bot page is not worth handing to an image reader), the path cannot escape its destination root, executable extensions are refused outright, and going over the size cap **fails instead of truncating**. Files land in the temp directory unless you explicitly ask for the workspace. |
+| `web_search` | Searches through the configured engine chain (default **Bing → DuckDuckGo → Baidu**) and returns citeable sources (title, link, snippet, date), a summary, a status flag, and uncertainty notes. An `engine` argument pins one engine for the call. |
+| `web_fetch` | Fetches one HTTP(S) URL, returning Markdown by default or the raw body on request, with outgoing links and warnings. PDF, OOXML (`docx`/`pptx`/`xlsx`), ODF (`odt`/`odp`/`ods`) and EPUB responses are converted to Markdown. Feeds are recognized by their root element — `<rss>`, `<feed>`, `<rdf:RDF>` — and rendered item by item, so RSS 2.0, RSS 1.0 (RDF) and Atom 1.0 read as entries ([details](docs/cli.md#feeds)). |
+| `http_request` | Issues a low-level HTTP(S) request with full method, header and body control. |
+| `web_sitemap` | Looks up a curated table of **178** authoritative portals in 23 categories (arxiv, MDN, package registries, Q&A, government, news, video…) by domain, category, priority or free text, optionally returning a paste-able digest. |
+| `web_config` | Reads the live dsh-network configuration, or applies a partial patch once you enable the safety toggle (see [Settings](#settings)). Full behaviour: [configuration.md](docs/configuration.md#web_config-tool-and-the-safety-toggle). |
+| `web_download` | **Off by default.** Saves a binary file (image, archive, media, font) to disk and returns its path, on the same transport as every other tool rather than a socket of its own. See [Safety](#safety) for the fences. |
+
+`web_fetch` and `http_request` bodies over the inline cap (about 20 KB) return
+a preview plus a `cacheId`; the model pages the rest with one more call, and an
+oversized feed preview always stops on a whole entry boundary, so it can jump
+straight to entry 40 without re-fetching the URL. See
+[CLI and cache paging](docs/cli.md#cache-paging).
 
 ### Tool cards
 
@@ -104,36 +107,36 @@ row over the result body:
 
 </div>
 
-`web_config` gets the same treatment. A read collapses to
-`Network config · Read config · N engines`; a write opens on its own and lists
-every field it changed **with the value that was actually stored**, so a
-request the host clamped (ask for `searchMaxResults: 50`, get `20`) reads as a
-clamp rather than as the request; and a write the safety toggle refused shows
-as an amber *refused* block — never as a silent no-op, and never as a change
-list of edits that did not happen. The live config itself sits underneath as
-labelled groups (engine chain with key chips, timeouts, protections, allowlist,
-caps, tool switches, GitHub) over the raw JSON.
-
-`web_fetch` / `http_request` bodies above the inline cap (about 20 KB) come
-back as a preview plus a `cacheId`, and the model pages through the rest with
-one more call — see [CLI and cache paging](docs/cli.md#cache-paging). An
-oversized feed degrades the same way, but its preview always stops on a whole
-entry boundary, so the model can read the first items and jump straight to
-entry 40 with one `cacheId` call instead of re-fetching the URL.
+`web_config` uses the same card. A read collapses to
+`Network config · Read config · N engines`; a write expands and lists each
+changed field **with the value that was stored**, so a field the host clamped
+(ask for `searchMaxResults: 50`, get `20`) reads as a clamp rather than as the
+request, and a write the safety toggle refused shows as an amber *refused*
+block instead of a silent no-op. The live config sits underneath in labelled
+groups (engine chain with key chips, timeouts, protections, allowlist, caps,
+tool switches, GitHub) above the raw JSON.
 
 ### Support search engines
 
 | Engine id | Credential |
 |---|---|
-| `deepseek-official` | DSH native account/credentials (optional; usage may be billed) |
+| `deepseek-official`(HOST ONLY) | DSH native account/credentials (optional; usage may be billed) |
 | `bing` | none |
 | `duckduckgo` | none |
 | `baidu` | none |
+| `so360` | none (IP rate limit) |
 | `github` | token optional |
-| `searxng` | none (endpoint-scoped) |
+| `searxng` | none (your own instance) |
 | `brave` | **keyed, billed** |
+| `mojeek` | none (Altcha-gated) / **keyed, billed** |
+| `tavily` | keyless (rate-limited) / **keyed, billed** |
 
+Bing → DuckDuckGo → Baidu is the default chain; the other are opt-in.
 See [Search engines](docs/search-engines.md) for more details.
+
+### Optional native DeepSeek search
+
+Add **DeepSeek (native)** in Settings → Network → Search engines, then use the move controls to choose its fallback position. Existing chains remain unchanged. The plugin runs the official provider in an isolated Cordis scope using DSH-managed native settings and credentials. Verified with DSH **0.2.0-rc.2**; no host patch or duplicate Cordis installation is needed. Native failures fall back, valid empty results stop, and cancellation terminates the chain. Standalone CLI native searches report that a DSH host is required. See [native search](docs/native-search.md) for configuration and test details.
 
 ### Sidebar web search
 
@@ -165,17 +168,14 @@ disabled, and the plugin row is inserted with default settings.
 
 > **Why `--allow-build`?** The CLI bundle (`dist/cli.cjs`) is built during
 > install by the package's `prepare` script, and pnpm 12 blocks build scripts
-> of git-hosted dependencies unless you allow them. If every tool call fails
-> with `dsh-network CLI bundle is missing`, the prepare script did not run —
-> reinstall with the flag above, or see
-> [development.md](docs/development.md#git-installs-and-the-prepare-hook) for
-> the `allowBuilds` alternative.
+> of git-hosted dependencies unless you allow them. If tool calls fail with
+> `dsh-network CLI bundle is missing`, see
+> [Troubleshooting](#troubleshooting).
 
 ## Quick start
 
-1. `dsh web`, then open **设置 → 网络** (Settings → Network). Flip
-   **Allow the model to modify settings** on only if you want the model to be
-   able to change this plugin's settings itself.
+1. `dsh web`, then open **Settings → Network**. Everything this
+   plugin does is configured there.
 2. Ask something that needs the live web — "search for the latest TypeScript
    release notes and cite the sources". The `web_search` card shows the
    engines' answer with the sources underneath.
@@ -184,27 +184,27 @@ disabled, and the plugin row is inserted with default settings.
 4. Add engines, paste a GitHub token, or tune timeouts in the same settings
    section — edits apply to the next tool call, no restart.
 
-On a fresh install nothing needs configuring: the default chain is keyless, and
-the engines that would cost you something (or need a server of yours) are never
-enabled behind your back.
+Nothing needs configuring on a fresh install: the default chain is keyless,
+and an engine that would cost you something (or need a server of yours) is
+never enabled behind your back.
 
 ## Settings
 
-Everything lives in **设置 → 网络** and takes effect on the next tool call:
+Everything lives in **Settings → Network** and takes effect on the next tool call:
 
-- **Search engines** — the live chain (default Bing → DuckDuckGo → Baidu), with
-  a per-engine **Edit** dialog for endpoint, **API Key**, and custom
+- **Search engines** — the live chain (default Bing → DuckDuckGo → Baidu),
+  with a per-engine **Edit** dialog for endpoint, **API Key**, and custom
   `key=value` options. See [search engines](docs/search-engines.md).
 - **Tool switches** — `webSearchTool`, `webFetchTool`, `httpRequestTool`,
-  `webSitemapTool`. Flipping one off makes the matching tool fail fast, and the
-  sidebar search route answers 403 while Web search is off. Restarting dsh
-  fully unregisters the disabled tools.
-- **`downloadTool` is off by default.** It is the only tool here that writes to
-  disk, so the user opts in; once on, the model can neither read nor flip that
-  switch (handled exactly like `allowConfigEdit`).
-- **Safety** — SSRF protection, redirect protection, and protocol lock are ON
-  by default, next to the model-settings toggle above.
-- Timeouts, User-Agent, result cap, redirect budget, allowed HTTP methods, and
+  `webSitemapTool`, and `downloadTool` (**off by default**: it is the only tool
+  here that writes to disk, and the model can neither read nor flip that
+  switch, exactly like `allowConfigEdit`). Flipping a switch off makes the
+  matching tool fail fast and answers 403 on the sidebar route; restarting dsh
+  unregisters the tool entirely.
+- **Safety** — the toggles for the protections listed under [Safety](#safety),
+  next to **Allow the model to modify settings**, which governs `web_config`
+  writes.
+- Timeouts, User-Agent, result cap, redirect budget, allowed HTTP methods and
   the host allowlist all sit in the same section.
 
 Settings persist to `~/.dsh/dsh-network.json`; delete that file to reset.
@@ -221,29 +221,39 @@ reference, including the loopback routes, is in
   are on by default; the allowlist is empty (unrestricted) until you set one.
 - The transport refuses true binary content (image, audio, video, font,
   archive, generic octet-stream). Only a fixed allowlist of document MIME types
-  is parsed to Markdown. The one exception is `web_download` asking to save a
-  file — and it takes the same transport rather than opening its own socket.
+  is parsed to Markdown. The one exception is `web_download`, and it takes the
+  same transport rather than opening its own socket.
 - The loopback server binds to `127.0.0.1` only, and request bodies are capped.
 - `web_config`'s `set` action is gated by a toggle the model can neither read
   nor write, so a bad patch can never lock the model out of its own write path.
-- `web_download` adds three more fences: the filename cannot escape its
+- `web_download` adds three more fences. The filename cannot escape its
   destination root (separators, `..` and Windows device names are neutralized,
-  and the resolved path is re-checked before the write); executable extensions
-  (`.exe`/`.ps1`/`.sh`/`.js`/`.bat`/…) are refused, checking both the declared
-  name and the sniffed one; and going over the byte cap **fails** rather than
+  and the resolved path is re-checked before the write). Executable extensions
+  (`.exe`/`.ps1`/`.sh`/`.js`/`.bat`/…) are refused under both the declared and
+  the sniffed name. And a body over the byte cap **fails** instead of
   truncating, with an atomic `.part` → rename write, so a file that exists is a
   whole file.
 
+## One thing to know
+
+We officially support `dsh 0.1.0.rc2` and later. That's because the API has become 
+more stable since this version.
+
+But there is one exception: native deepseek search API function use API 
+(DEEPSEEK_PROVIDER_ID, namespace, Config, apply all present), which is manully verified 
+with **DSH 0.0.1.rc3** and later, so it might be compatible with older
+DSH versions. But we do not declare support for any versions prior to 0.1.0.rc2.
+
 ## Troubleshooting
 
-- **`npx @naivg/dsh-network doctor`** prints the resolved configuration — engine
-  chain, timeouts, which API keys are configured — without contacting anything.
-  Safe offline, and the first thing to check.
+- **`npx @naivg/dsh-network doctor`** prints the resolved configuration —
+  engine chain, timeouts, which API keys are configured — without contacting
+  anything. Safe offline, and the first thing to check.
 - **`dsh-network CLI bundle is missing`** — the CLI build was skipped, which can
   only happen on a git or link install (the published tarball ships `dist/`).
   Reinstall the GitHub route with `--allow-build=@naivg/dsh-network`, or run
   `pnpm install && pnpm build` in the checkout (link installs). See
-  [development.md](docs/development.md#git-installs-and-the-prepare-hook).
+  [development.md](docs/development.md#the-git-route-and-allowbuilds).
 - **A keyed engine says "no credential"** — paste the key in that engine's
   **Edit** dialog and save; the row badge turns green only when a key is really
   stored. See [search engines](docs/search-engines.md#credentials) for the
@@ -276,8 +286,3 @@ reference, including the loopback routes, is in
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-
-### Optional native DeepSeek search
-
-Add **DeepSeek (native)** in Settings → Network → Search engines, then use the move controls to choose its fallback position. Existing chains remain unchanged. The plugin runs the official provider in an isolated Cordis scope using DSH-managed native settings and credentials. Verified with DSH **0.2.0-rc.2**; no host patch or duplicate Cordis installation is needed. Native failures fall back, valid empty results stop, and cancellation terminates the chain. Standalone CLI native searches report that a DSH host is required. See [native search](docs/native-search.md) for configuration and test details.

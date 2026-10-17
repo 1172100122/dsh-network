@@ -54,10 +54,16 @@ import {
 import {
   defaultRegistry,
   registerDefaultEngines,
+  MOJEEK_FREE_CHALLENGE_MARKER,
+  MOJEEK_FREE_ENGINE_ID,
+  normalizeEngineId,
+  normalizeEngineIds,
   type EngineBody,
   type SearchEngine,
   type SearchSource,
 } from './engines/index.ts'
+import { mojeekLogin } from './mojeek-login.ts'
+import type { MojeekSession } from './mojeek-session.ts'
 import {
   WEB_SITEMAP,
   categoriesInUse,
@@ -174,7 +180,29 @@ interface DownloadEntry {
   attempts: Array<{ stage: string; error: string }>
 }
 
-type Entry = SearchEntry | FetchEntry | HttpEntry | SitemapEntry | DownloadEntry
+/**
+ * `mojeek-login` result. This verb has no tool behind it: it exists to turn
+ * the Altcha proof-of-work into the `chllg` cookie a standalone CLI run needs,
+ * which the persistent server instead solves for itself.
+ */
+interface MojeekLoginEntry {
+  kind: 'mojeek-login'
+  engine: string
+  status: 'ok' | 'unavailable'
+  summary: string
+  /** The `chllg=…` pair, ready to paste as the engine credential. */
+  cookie: string
+  /** ISO-8601 expiry read out of the cookie, or `''` when unknown. */
+  expiresAt: string
+  counter: number
+  solveMs: number
+  /** Counters tried before the key prefix matched. */
+  powAttempts: number
+  uncertainty: string[]
+  warnings: string[]
+}
+
+type Entry = SearchEntry | FetchEntry | HttpEntry | SitemapEntry | DownloadEntry | MojeekLoginEntry
 interface Envelope {
   ok: boolean
   results: Entry[]
@@ -184,7 +212,7 @@ interface Envelope {
 }
 
 interface CliFlags {
-  mode: 'search' | 'fetch' | 'http' | 'sitemap' | 'download' | 'help' | 'doctor' | 'server' | 'unknown'
+  mode: 'search' | 'fetch' | 'http' | 'sitemap' | 'download' | 'help' | 'doctor' | 'server' | 'mojeek-login' | 'unknown'
   query?: string
   url?: string
   method?: string
@@ -334,6 +362,8 @@ function parseFlags(argv: string[]): CliFlags {
       flags.mode = 'download'
     } else if (arg === 'doctor') {
       flags.mode = 'doctor'
+    } else if (arg === 'mojeek-login' || arg === 'mojeek_login') {
+      flags.mode = 'mojeek-login'
     } else if (arg === '-h' || arg === '--help') {
       flags.showHelp = true
     } else if (arg.startsWith('-')) {
@@ -354,6 +384,7 @@ function parseFlags(argv: string[]): CliFlags {
     else if (positional[0] === 'sitemap' || positional[0] === 'web_sitemap') flags.mode = 'sitemap'
     else if (positional[0] === 'download' || positional[0] === 'web_download') flags.mode = 'download'
     else if (positional[0] === 'doctor') flags.mode = 'doctor'
+    else if (positional[0] === 'mojeek-login' || positional[0] === 'mojeek_login') flags.mode = 'mojeek-login'
     else if (typeof flags.cacheId === 'string') flags.mode = 'http'
     // Bare `--cache-id` paging: the only producer in practice is the host's
     // http_request handler (web_fetch prefixes the `fetch` subcommand), and
@@ -381,6 +412,7 @@ function helpText(): string {
     '  dsh-network sitemap                      [options]   Look up the curated portals table (web_sitemap)',
     '  dsh-network download -u <url>           [options]   Save a binary file to tmp or the workspace (web_download)',
     '  dsh-network doctor                                   Readiness report (no network)',
+    '  dsh-network mojeek-login                             Solve Mojeek\'s Altcha proof-of-work → chllg cookie',
     '  dsh-network server                       [options]   Persistent loopback HTTP server (host uses this)',
     '',
     'Options:',
@@ -422,9 +454,14 @@ function helpText(): string {
     '  --max-bytes       int        Byte cap for one download (default 100 MB; the transfer',
     '                                FAILS past the cap, it never truncates)',
     '',
-    'Engine choices for search: bing, duckduckgo, baidu, github, searxng, brave. Default chain is the order given above.',
+    'Engine choices for search: bing, duckduckgo, baidu, so360, github, searxng, brave, mojeek-free, mojeek, tavily.',
+    'Default chain is the order given above; the six after the three default engines are opt-in.',
     'GitHub engine: hybrid REST search (repositories/code/issues/users). Code search needs',
     '  DSH_NETWORK_GITHUB_TOKEN; anonymous search is limited to 10 req/min per IP.',
+    '360搜索 engine (`so360`): keyless Chinese index at https://www.so.com/s. IP rate-limited — a burst',
+    '  earns a graphical captcha page (HTTP 200, titled 访问异常页面); the plugin reports it instead of',
+    '  retrying. Clear it once at https://www.so.com in a browser. A page yields 5-7 organic hits',
+    '  (AI-answer / image / video cards take the rest). `options`: pn (page, 2..100).',
     'Brave engine: keyed Search API (billed per query — no free tier). The key comes from the',
     '  host-injected DSH_NETWORK_SEARCH_ENGINE_API_KEYS map, or DSH_NETWORK_BRAVE_API_KEY for a',
     '  standalone run. Its `options` map (settings UI) accepts country, searchLang, uiLang,',
@@ -434,6 +471,37 @@ function helpText(): string {
     '  DSH_NETWORK_SEARXNG_URL, default http://127.0.0.1:8888 (loopback/private endpoints are reached',
     '  automatically for this engine only — SSRF guards stay on for everything else). The instance must',
     '  enable `json` under `search.formats` in its settings.yml, or every request gets a 403.',
+    'Mojeek engine (`mojeek-free`): Mojeek\'s own index behind an Altcha proof-of-work — NOT the',
+    '  official billed Search API. The credential is a `chllg` cookie, never an API key:',
+    '    - Auto (inside dsh): the persistent server solves the proof-of-work on the first search and',
+    '      caches the cookie for ~30 days. Nothing to configure, nothing to paste;',
+    '    - Manual (single-shot CLI only): `dsh-network mojeek-login` prints the cookie — export it as',
+    '      DSH_NETWORK_MOJEEK_COOKIE, or store it as searchEngineApiKeys["mojeek-free"] in',
+    '      ~/.dsh/dsh-network.json.',
+    '  Registered last and absent from the default chain: an unconfigured install never touches it.',
+    'Mojeek Search API (`mojeek`): Mojeek\'s official billed Search API (https://www.mojeek.com/support/api/...).',
+    '  Every query is billed; without a key the engine sends NO request. The key rides in the URL itself',
+    '  (?api_key=…), resolved from the host-injected DSH_NETWORK_SEARCH_ENGINE_API_KEYS map, or from the',
+    '  DSH_NETWORK_MOJEEK_API_KEY env var for a standalone run. Response is JSON (`fmt=json`).',
+    '  Optional `options` (settings UI; one key=value per line): s=1..1000 (start, 1-based paging),',
+    '  t=1..100 (results per page), since=YYYYMMDD|day|month|year (recency), before=YYYYMMDD,',
+    '  rb=GB|rbb=10 (region boost), lb=EN|lbb=100 (language boost), lr=EN,FR (β language restrict),',
+    '  safe=0|1, date=0|1 (include last-modified date as published_at), cdate=0|1, size=0|1,',
+    '  site=mojeek.com, fi/.example.com (max 25), fe, tlen=0..127, dlen=0..511, datewr=0|100, qm (excluded words).',
+    'Tavily engine (`tavily`): Tavily Search API (https://docs.tavily.com/documentation/api-reference/endpoint/search).',
+    '  POST https://api.tavily.com/search with a JSON body; auth is `Authorization: Bearer <key>`.',
+    '  Bills 1 API credit per query at the default `search_depth=basic` (advanced = 2 credits).',
+    '  Tavily uniquely supports a KEYLESS mode (no key ⇒ `X-Tavily-Access-Mode: keyless`, rate-limited),',
+    '  so the engine stays reachable without a key — but the credential hop still feeds ',
+    '  DSH_NETWORK_SEARCH_ENGINE_API_KEYS.tavily (or DSH_NETWORK_TAVILY_API_KEY for a standalone run)',
+    '  to lift the limit.',
+    '  Optional `options` (settings UI; one key=value per line): search_depth=advanced|basic|fast|ultra-fast',
+    '  (default basic), topic=general|news|finance, time_range=day|week|month|year|d|w|m|y,',
+    '  include_answer=true|false|basic|advanced, include_raw_content=false|markdown|text,',
+    '  exclude_domains=ad.com,spam.com (comma-separated), include_favicon=true|false,',
+    '  country=<country name> (only if topic=general), language=en|fr|zh-cn (ISO 639-1 or English name),',
+    '  exact_match=true|false, safe_search=true|false. Unknown keys and out-of-vocabulary values',
+    '  are dropped before the request is built, so a typo can\'t burn a billed call on a 422.',
     'web_sitemap: curated table of authoritative portals (domain, description, category, priority,',
     '  searchUrl template). Helps the model skip generic search for known sources.',
   ].join('\n')
@@ -526,7 +594,7 @@ function readEnvApiKeys(env: NodeJS.ProcessEnv): Record<string, string> {
   const raw = readEnvObject(env, 'DSH_NETWORK_SEARCH_ENGINE_API_KEYS')
   const out: Record<string, string> = {}
   for (const [id, value] of Object.entries(raw)) {
-    if (typeof value === 'string' && value.trim() !== '') out[id] = value.trim()
+    if (typeof value === 'string' && value.trim() !== '') out[normalizeEngineId(id)] = value.trim()
   }
   return out
 }
@@ -561,20 +629,65 @@ function resolveEngineApiKey(
 }
 
 /**
- * The credential header for one keyed engine, according to the engine's own
- * `auth` declaration. Returns an empty object for keyless engines (every
+ * The credential placement for one keyed engine, according to the engine's
+ * own `auth` declaration. Returns an empty pair for keyless engines (every
  * HTML scraper) and for a keyed engine with no key — the caller never gets
  * that far in the latter case: `requiresToken` short-circuits the request.
+ *
+ * Two placement modes exist (declared via `auth.in`):
+ *
+ *   `header` (the default and what Brave + Mojeek's `chllg` cookie use) —
+ *   the key rides in a request header. `headers` is the dict to merge over
+ *   `defaultHeaders`.
+ *
+ *   `query` (Mojeek's billed Search API is the first instance) — the key is a
+ *   URL query parameter (`?api_key=…`). `headers` is empty because a missing
+ *   or rejected `api_key` would otherwise show as a credential rejection on
+ *   the wrong code path, and `queryParam` carries the `{ name, value }` pair
+ *   so the engine can compose the URL itself. The CLI never inspects the
+ *   URL after the engine builds it — neither to redact the key for logs nor
+ *   to skip it on a retry; both would be silently wrong.
+ *
+ * Engines that want `query` mode compose their URL by reading the resolved
+ * key out of `buildRequestOptions(engine, …).apiKey` (this function only
+ * handles headers).
  */
-function authHeadersFor(
-  engine: SearchEngine,
-  config: ParsedConfig,
-  env: NodeJS.ProcessEnv,
-): Record<string, string> {
-  if (!engine.auth) return {}
-  const key = resolveEngineApiKey(engine, config, env)
-  if (key === '') return {}
-  return { [engine.auth.header]: engine.auth.scheme === 'bearer' ? `Bearer ${key}` : key }
+function authFor(engine: SearchEngine, key: string): {
+  headers: Record<string, string>
+  queryParam: { name: string; value: string } | null
+} {
+  if (!engine.auth) return { headers: {}, queryParam: null }
+  if (key === '') {
+    // Keyless fallback: an `optional: true` engine that ships a
+    // `fallbackHeader` (Tavily's `X-Tavily-Access-Mode: keyless` is the only
+    // current instance) still gets a usable auth header when no key is
+    // configured. Without `fallbackHeader` we send an unauthenticated request
+    // — the engine stays reachable, just restricted to whatever its
+    // keyless tier accepts.
+    if (engine.auth.optional && engine.auth.fallbackHeader) {
+      return {
+        headers: { [engine.auth.fallbackHeader.name]: engine.auth.fallbackHeader.value },
+        queryParam: null,
+      }
+    }
+    return { headers: {}, queryParam: null }
+  }
+  if (engine.auth.in === 'query') {
+    return { headers: {}, queryParam: { name: engine.auth.queryName ?? 'api_key', value: key } }
+  }
+  return {
+    headers: { [engine.auth.header]: engine.auth.scheme === 'bearer' ? `Bearer ${key}` : key },
+    queryParam: null,
+  }
+}
+
+/**
+ * The credential header for one keyed engine — legacy spelling kept as a
+ * thin wrapper around `authFor` so the existing `runSearch` reads
+ * unambiguously. New code should call `authFor` directly.
+ */
+function authHeadersFor(engine: SearchEngine, key: string): Record<string, string> {
+  return authFor(engine, key).headers
 }
 
 /**
@@ -588,10 +701,12 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): ParsedConfig {
   // The configured engine list comes from the env var; we accept any id
   // the registry knows about (case-insensitive). Unknown ids are dropped
   // here and the chain falls back to the registry's `fallback()`.
-  const enginesRaw = (env.DSH_NETWORK_SEARCH_ENGINES ?? 'bing,duckduckgo,baidu')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s.length > 0)
+  const enginesRaw = normalizeEngineIds(
+    (env.DSH_NETWORK_SEARCH_ENGINES ?? 'bing,duckduckgo,baidu')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0),
+  )
   return {
     fetchTimeoutMs: readEnvInt(env, 'DSH_NETWORK_FETCH_TIMEOUT_MS', DEFAULT_TIMEOUT_MS),
     searchTimeoutMs: readEnvInt(env, 'DSH_NETWORK_SEARCH_TIMEOUT_MS', 15_000),
@@ -608,7 +723,62 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): ParsedConfig {
     workspaceDir: readEnvString(env, 'DSH_NETWORK_WORKSPACE_DIR', '').trim(),
     downloadMaxBytes: readEnvInt(env, 'DSH_NETWORK_DOWNLOAD_MAX_BYTES', DEFAULT_DOWNLOAD_MAX_BYTES),
     searchEngineApiKeys: readEnvApiKeys(env),
-    engineOptions: readEnvObject(env, 'DSH_NETWORK_ENGINE_OPTIONS'),
+    engineOptions: canonicalizeOptionKeys(readEnvObject(env, 'DSH_NETWORK_ENGINE_OPTIONS')),
+  }
+}
+
+/**
+ * Re-key the per-engine options map onto normalized engine ids, so a key
+ * written by hand finds the engine (`config.engineOptions[engine.id]` is a
+ * plain lookup — the reader never applies a spelling rule). The CLI's own
+ * `readEngineEnvOptions` does the same for the direct env read.
+ */
+function canonicalizeOptionKeys(map: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [id, value] of Object.entries(map)) {
+    out[normalizeEngineId(id)] = value
+  }
+  return out
+}
+
+/**
+ * The options bag handed to `engine.buildRequests(query, options)`.
+ *
+ * The settings dialog's per-engine textarea (`searchEngineConfigs[id].options`
+ * → `DSH_NETWORK_ENGINE_OPTIONS` → `config.engineOptions[id]`) is spread at the
+ * TOP level as well as kept nested, and the spread comes FIRST on purpose.
+ * Engines read their own fields from the top level (`buildBraveUrl` reads
+ * `opts.country`, `buildMojeekUrl` reads `opts.s`), and a one-shot CLI gets
+ * them from `process.env` via `readEngineEnvOptions` — which the persistent
+ * server cannot see, because the host ships the options per `/invoke` instead
+ * of in the child's environment.
+ *
+ * `apiKey` is only filled in for `auth.in === 'query'` engines (Mojeek's
+ * official Search API). Headers-mode engines never see the key: the CLI
+ * injects the header itself, and the secret doesn't ride on the options
+ * bag the persistent server logs.
+ */
+function buildRequestOptions(
+  engine: SearchEngine,
+  perPage: number,
+  hasApiKey: boolean,
+  apiKey: string,
+  config: ParsedConfig,
+): Record<string, unknown> {
+  const own = config.engineOptions[engine.id]
+  return {
+    ...(own && typeof own === 'object' && !Array.isArray(own) ? own : {}),
+    hasToken: config.githubToken !== '',
+    hasApiKey,
+    perPage,
+    indexes: config.githubIndexes,
+    sort: config.githubSort,
+    engineOptions: own,
+    // Only `in: 'query'` engines read this; every other engine (Brave, the
+    // chllg-cookie case) sees `hasApiKey: true` and lets `authFor()` inject
+    // the header instead. Carrying the secret in the bag for a non-query
+    // engine would put it on a path the engine has no reason to see.
+    ...(engine.auth?.in === 'query' ? { apiKey } : {}),
   }
 }
 
@@ -662,19 +832,20 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
     }
   }
   const max = flags.maxResults || config.searchMaxResults
-  const override = typeof flags.engine === 'string' && flags.engine !== ''
-    ? defaultRegistry.get(flags.engine)
-    : undefined
-  if (typeof flags.engine === 'string' && flags.engine !== '' && !override) {
+  const pinnedId = typeof flags.engine === 'string' && flags.engine !== ''
+    ? normalizeEngineId(flags.engine)
+    : ''
+  const override = pinnedId === '' ? undefined : defaultRegistry.get(pinnedId)
+  if (pinnedId !== '' && !override) {
     return {
       kind: 'search',
-      engine: flags.engine,
+      engine: pinnedId,
       status: 'unavailable',
-      summary: `unknown search engine "${flags.engine}"; available: ${defaultRegistry.all().map((e) => e.id).join(', ')}`,
+      summary: `unknown search engine "${pinnedId}"; available: ${defaultRegistry.all().map((e) => e.id).join(', ')}`,
       items: [],
       uncertainty: [],
       warnings: [],
-      attempts: [{ engine: flags.engine, error: 'unknown engine id' }],
+      attempts: [{ engine: pinnedId, error: 'unknown engine id' }],
     }
   }
   const chain: readonly SearchEngine[] = override ? [override] : defaultRegistry.resolve(config.searchEngines)
@@ -683,32 +854,50 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
   // key exists (`hasApiKey`), never the key itself.
   const authEnv = ctx?.env ?? process.env
   for (const engine of chain) {
-    const apiKey = engine.auth ? resolveEngineApiKey(engine, config, authEnv) : ''
-    const hasApiKey = apiKey !== ''
+    let apiKey = engine.auth ? resolveEngineApiKey(engine, config, authEnv) : ''
+    let hasApiKey = apiKey !== ''
+    // A Mojeek search whose credential is missing gets one from the server's
+    // session: the cookie IS the credential, and the host solved it once at
+    // startup rather than asking the user to paste it.
+    if (engine.id === MOJEEK_FREE_ENGINE_ID && ctx?.mojeekSession && !hasApiKey) {
+      if (ctx.mojeekSession.cookie !== '') {
+        apiKey = ctx.mojeekSession.cookie
+        hasApiKey = true
+      } else {
+        const cookie = await ctx.mojeekSession.ensure({
+          timeoutMs: config.searchTimeoutMs,
+          allowlist: config.allowlist,
+          allowPrivateNetwork: flags.allowPrivate,
+          redirectProtection: flags.redirectProtection,
+          protocolLock: flags.protocolLock,
+          maxRedirects: config.maxRedirects,
+        })
+        if (cookie !== '') {
+          apiKey = cookie
+          hasApiKey = true
+        }
+      }
+    }
     try {
       // A keyed engine with no key never reaches the network: the same
       // synthetic-401 path GitHub has always used for its token-gated code
       // index keeps the error classification on one code path.
-      const authBlocked = engine.auth !== undefined && !hasApiKey
-      const headers: Record<string, string> = {
+      // `optional: true` engines (Tavily's documented keyless mode is the
+      // current instance) bypass this gate — the request still ships, just
+      // with `authFor`'s `fallbackHeader` instead of a real credential.
+      const authBlocked = engine.auth !== undefined && !engine.auth.optional && !hasApiKey
+      let headers: Record<string, string> = {
         ...engine.defaultHeaders,
-        ...(hasApiKey ? authHeadersFor(engine, config, authEnv) : {}),
+        ...authHeadersFor(engine, apiKey),
         ...(config.githubToken !== '' ? { authorization: `Bearer ${config.githubToken}` } : {}),
         ...(flags.headers ?? {}),
       }
       // Hybrid engines (e.g. GitHub) fan out into several parallel
       // requests and fuse the bodies themselves; classic engines stay
       // on the single-request path.
-      const requests = engine.buildRequests?.(query, {
-        hasToken: config.githubToken !== '',
-        hasApiKey,
-        perPage: max,
-        indexes: config.githubIndexes,
-        sort: config.githubSort,
-        engineOptions: config.engineOptions[engine.id],
-      })
+      const requests = engine.buildRequests?.(query, buildRequestOptions(engine, max, hasApiKey, apiKey, config))
       if (requests && requests.length > 0 && engine.parseMany) {
-        const bodies = await Promise.all(
+        let bodies = await Promise.all(
           requests.map(async (req): Promise<EngineBody> => {
             // A token-gated request with no token configured never hits
             // the network; the engine classifies the synthetic 401 on
@@ -719,6 +908,9 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
             try {
               const fetched = await runClientFetch({
                 url: req.url,
+                method: req.method,
+                body: req.body,
+                contentType: req.contentType,
                 timeoutMs: config.searchTimeoutMs,
                 maxBytes: config.maxBodyChars,
                 maxChars: config.maxBodyChars,
@@ -738,7 +930,74 @@ async function runSearch(flags: CliFlags, config: ParsedConfig, ctx?: RunContext
             }
           }),
         )
-        const result = engine.parseMany(bodies, max)
+        let result = engine.parseMany(bodies, max)
+        // A 200 that is really the Altcha challenge page means the cookie is
+        // stale or was revoked. Parsing it would report a silent zero-hit
+        // answer, so the session re-solves and the SAME call retries with the
+        // fresh cookie — the user never sees a stale-cookie warning.
+        if (
+          engine.id === MOJEEK_FREE_ENGINE_ID && hasApiKey && ctx?.mojeekSession &&
+          result.items.length === 0 && bodies.length === 1 &&
+          (bodies[0]?.status ?? 0) === 200 &&
+          MOJEEK_FREE_CHALLENGE_MARKER.test(bodies[0]?.body ?? '')
+        ) {
+          ctx.mojeekSession.invalidate()
+          const refreshed = await ctx.mojeekSession.ensure({
+            timeoutMs: config.searchTimeoutMs,
+            allowlist: config.allowlist,
+            allowPrivateNetwork: flags.allowPrivate,
+            redirectProtection: flags.redirectProtection,
+            protocolLock: flags.protocolLock,
+            maxRedirects: config.maxRedirects,
+          })
+          if (refreshed !== '') {
+            apiKey = refreshed
+            hasApiKey = true
+            headers = {
+              ...engine.defaultHeaders,
+              ...authHeadersFor(engine, apiKey),
+              ...(config.githubToken !== '' ? { authorization: `Bearer ${config.githubToken}` } : {}),
+              ...(flags.headers ?? {}),
+            }
+            const retryRequests = engine.buildRequests?.(query, buildRequestOptions(engine, max, hasApiKey, apiKey, config))
+            // Same gate as the outer authBlocked — see that comment for the
+            // optional-key rule. The retry path mirrors it so a re-solved
+            // Mojeek cookie wouldn't be the only reason Tavily's keyless path
+            // got to ignore its own credential gate.
+            const retryAuthBlocked = engine.auth !== undefined && !engine.auth.optional && !hasApiKey
+            if (retryRequests && retryRequests.length > 0) {
+              bodies = await Promise.all(
+                retryRequests.map(async (req): Promise<EngineBody> => {
+                  if ((req.requiresToken && config.githubToken === '') || retryAuthBlocked) {
+                    return { key: req.key, body: '', status: 401, headers: {} }
+                  }
+                  try {
+                    const fetched = await runClientFetch({
+                      url: req.url,
+                      method: req.method,
+                      body: req.body,
+                      contentType: req.contentType,
+                      timeoutMs: config.searchTimeoutMs,
+                      maxBytes: config.maxBodyChars,
+                      maxChars: config.maxBodyChars,
+                      maxRedirects: config.maxRedirects,
+                      userAgent: config.userAgent || undefined,
+                      allowlist: config.allowlist,
+                      allowPrivateNetwork: flags.allowPrivate || engineAllowsPrivate(engine),
+                      redirectProtection: flags.redirectProtection,
+                      protocolLock: flags.protocolLock,
+                      headers: { ...headers, ...(req.headers ?? {}) },
+                    })
+                    return { key: req.key, body: fetched.body, status: fetched.status, headers: fetched.headers }
+                  } catch (error) {
+                    return { key: req.key, body: '', status: 0, headers: {}, error: (error as Error).message }
+                  }
+                }),
+              )
+              result = engine.parseMany(bodies, max)
+            }
+          }
+        }
         if (result.items.length > 0) {
           return {
             kind: 'search',
@@ -1293,8 +1552,10 @@ async function runSitemap(flags: CliFlags): Promise<SitemapEntry> {
     entries: entries.map(summarize),
     resolved,
     digest: flags.sitemapDigest ? renderPromptDigest({
+      query: flags.query,
       category: flags.sitemapCategory,
       minPriority: flags.sitemapMinPriority,
+      limit,
     }) : undefined,
     uncertainty,
     warnings,
@@ -1326,11 +1587,66 @@ async function doctor(config: ParsedConfig, env: NodeJS.ProcessEnv = process.env
   }
 }
 
+/**
+ * `mojeek-login` — run Mojeek's Altcha flow once and print the cookie.
+ *
+ * Deliberately a verb of its own rather than something a search does inline:
+ * three requests per search (challenge → verify → search) would spend the
+ * per-IP burst budget several times faster than the single GET a stored
+ * cookie allows. The persistent server sidesteps this with a `MojeekSession`;
+ * a one-shot CLI has nowhere to cache, so it asks for the cookie once.
+ */
+async function runMojeekLogin(flags: CliFlags, config: ParsedConfig): Promise<MojeekLoginEntry> {
+  const outcome = await mojeekLogin({
+    timeoutMs: config.searchTimeoutMs,
+    allowlist: config.allowlist,
+    allowPrivateNetwork: flags.allowPrivate,
+    redirectProtection: flags.redirectProtection,
+    protocolLock: flags.protocolLock,
+    maxRedirects: config.maxRedirects,
+  })
+  const base = {
+    kind: 'mojeek-login' as const,
+    engine: MOJEEK_FREE_ENGINE_ID,
+    cookie: outcome.cookie,
+    expiresAt: outcome.expiresAt,
+    counter: outcome.counter,
+    solveMs: outcome.solveMs,
+    powAttempts: outcome.attempts,
+    uncertainty: [],
+    warnings: outcome.warnings,
+  }
+  if (!outcome.ok || outcome.cookie === '') {
+    return {
+      ...base,
+      status: 'unavailable',
+      summary: `Mojeek login failed: ${outcome.error || 'no cookie was issued'}`,
+    }
+  }
+  const valid = outcome.expiresAt !== '' ? `, valid until ${outcome.expiresAt}` : ''
+  return {
+    ...base,
+    status: 'ok',
+    summary:
+      `Mojeek cookie issued${valid} (proof-of-work: counter ${outcome.counter} after ` +
+      `${outcome.attempts} attempts in ${outcome.solveMs} ms). This engine authenticates with a cookie, ` +
+      'not an API key: export it as DSH_NETWORK_MOJEEK_COOKIE for a standalone run. Inside dsh nothing ' +
+      'has to be pasted — the persistent server solves the same proof-of-work on the first search and ' +
+      'caches the cookie for ~30 days.',
+  }
+}
+
 export interface RunContext {
   /** Shared result cache (only present in server mode). */
   cache?: ResultCache
   /** Per-invoke env snapshot overriding `process.env` for this run. */
   env?: NodeJS.ProcessEnv
+  /**
+   * Mojeek's cookie cache (only present in server mode). Absent for a
+   * one-shot CLI run, which then needs an explicit cookie — see
+   * `runMojeekLogin`.
+   */
+  mojeekSession?: MojeekSession
 }
 
 /**
@@ -1353,6 +1669,7 @@ export async function runOnce(argv: string[], ctx?: RunContext): Promise<Envelop
   // No cache argument: see runDownload's header.
   else if (flags.mode === 'download') entry = await runDownload(flags, config)
   else if (flags.mode === 'doctor') entry = await doctor(config, ctx?.env ?? process.env)
+  else if (flags.mode === 'mojeek-login') entry = await runMojeekLogin(flags, config)
   else entry = await runFetch_(flags, config, ctx?.cache)
 
   return {

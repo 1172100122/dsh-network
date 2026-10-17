@@ -38,7 +38,7 @@ import { summarizeForModel, applyCardSettings } from './config-summary.js'
 
 // ─────────────────────────────── model-facing tools ────────────────────────────
 function registerWebSearchTool(ctx, config, runSearch = createSearchRunner(config)) {
-  const knownEngines = Array.from(new Set(['deepseek-official', 'bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave', ...(Array.isArray(config.searchEngines) ? config.searchEngines : [])]))
+  const knownEngines = Array.from(new Set(['deepseek-official', 'bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek', 'tavily', ...(Array.isArray(config.searchEngines) ? config.searchEngines : [])]))
   ctx.tools.register({
     name: 'web_search',
     description:

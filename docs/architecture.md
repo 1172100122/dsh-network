@@ -163,6 +163,47 @@ Engine-specific notes (the user-facing version, with the option tables, is in
   `DSH_NETWORK_SEARXNG_URL` (default `http://127.0.0.1:8888`), and
   private-network access is granted only when the configured endpoint is
   itself loopback/private.
+- **TLS** — the pinned dispatcher sets `minVersion: 'TLSv1.2'` and a Firefox
+  cipher list.
+- **360搜索** (id `so360`, `src/engines/so360.ts`) is the fourth keyless HTML
+  scraper. 360 answers a rate-limited IP with a **graphical CAPTCHA page served
+  as HTTP 200**, so `parseMany` sniffs `SO360_BLOCKED_MARKER` before the parser
+  runs and reports the wall instead of returning a confident empty answer.
+- **Mojeek** (id `mojeek-free` — the free HTML SERP, not Mojeek's official
+  Search API) is a scrape whose credential is a cookie, so the Altcha
+  proof-of-work is solved by `mojeekLogin()` (`src/mojeek-login.ts`, async
+  PBKDF2 across four workers) and never inside the search request itself —
+  see [AGENTS.md](../AGENTS.md) for why that split is load-bearing. The
+  persistent server carries one `MojeekSession` (`src/mojeek-session.ts`)
+  that lazy-solves once, caches the cookie for ~30 days, and auto-recovers
+  from a `200` challenge page by re-solving and retrying in the same call —
+  the user sees results, never a stale-cookie warning. Because the host always
+  has that session, the settings dialog renders **no** key field for this
+  engine; the standalone CLI still uses the explicit `mojeek-login` verb plus
+  `DSH_NETWORK_MOJEEK_COOKIE`. `mojeek-free` sits last in the registry and is
+  absent from the default chain.
+- **Engine ids are normalized at every boundary.** `normalizeEngineId` /
+  `normalizeEngineIds` (`src/engines/types.ts`, applied at the CLI's env
+  boundary: chain, key map, options map, `--engine`) is mirrored by
+  `normalizeEngineChain` / `normalizeEngineMap` /
+  `normalizeEngineId` (`dsh/config-summary.js`, applied in `defaultConfig`, the
+  single funnel for the row config AND the persisted snapshot). They cannot
+  share a module — one half is hand-written ESM the host loads, the other is
+  bundled into the CLI — so a spelling rule has to touch both. Nothing errors
+  when they disagree: `SearchEngineRegistry.resolve` skips unknown ids, so the
+  engine would just quietly leave the chain.
+
+Per-engine options reach an engine two ways, and only one of them works in the
+persistent server. Engines read their own fields from the TOP level of the
+options bag (`buildBraveUrl` reads `opts.country`, `buildMojeekUrl` reads
+`opts.s`), but that bag used to be filled only from `process.env` through
+`readEngineEnvOptions` — which a one-shot CLI has and the server child does
+not, because the host ships options per `/invoke` rather than in the child's
+environment. `buildRequestOptions` (`src/cli.ts`) therefore spreads the
+engine's slice of `config.engineOptions` into the top level too, ahead of the
+caller's own keys so a free-form `perPage=…` line in the settings textarea
+cannot outrank the result cap. The nested `engineOptions` key is kept for
+engines that prefer it.
 
 ## Search answer contract
 

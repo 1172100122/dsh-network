@@ -29,6 +29,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { runOnce, type Envelope, type RunContext } from './cli.ts'
 import { ResultCache } from './cache.ts'
+import { createMojeekSession } from './mojeek-session.ts'
 
 export interface ServerHandle {
   port: number
@@ -116,6 +117,10 @@ function parseNumber(value: string | undefined): number | undefined {
 export async function startServer(opts: StartServerOptions = {}): Promise<ServerHandle> {
   const host = opts.host ?? '127.0.0.1'
   const cache = new ResultCache()
+  // One cookie cache for the whole process: the first mojeek-free search in
+  // this server's lifetime pays the Altcha solve, every later one reuses the
+  // cookie. A one-shot CLI run has nowhere to keep it and must be handed one.
+  const mojeekSession = createMojeekSession()
   const started = Date.now()
 
   const server = createServer(async (req, res) => {
@@ -124,7 +129,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
       if (req.method === 'POST' && url.pathname === '/invoke') {
         const body = await readBody(req, MAX_INVOKE_BODY_BYTES)
         const { argv, env } = parseInvoke(body)
-        const runCtx: RunContext = { cache, env }
+        const runCtx: RunContext = { cache, env, mojeekSession }
         let envelope: Envelope
         try {
           envelope = await runOnce(argv, runCtx)

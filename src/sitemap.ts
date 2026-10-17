@@ -528,6 +528,43 @@ export interface MatchOptions {
 }
 
 /**
+ * Filter+score pipeline shared by `searchSitemap` and `renderPromptDigest`.
+ *
+ * Empty queries return the top-N entries sorted by priority desc (so the
+ * model can still ask "what's in the catalog"); non-empty queries score
+ * entries against the tokenised query and drop everything below 1.
+ *
+ * Centralising this keeps the entry list and the digest in lock-step — a
+ * bug surfaced when `--digest` ignored the query and dumped the entire
+ * catalog over a query-scoped entry list.
+ */
+export function matchSitemap(query: string, options: MatchOptions = {}): WebSitemapEntry[] {
+  const limit = options.limit ?? 10
+  const minPriority = options.minPriority ?? 1
+  const tokens = tokenize(query)
+  const filtered = WEB_SITEMAP.filter((e) => {
+    if (options.category && e.category !== options.category) return false
+    if (e.priority < minPriority) return false
+    if (options.region && e.region && e.region !== 'global' && e.region !== options.region) return false
+    if (options.language && e.language && e.language !== 'multi' && e.language !== options.language) return false
+    return true
+  })
+  if (tokens.length === 0) {
+    return filtered
+      .slice()
+      .sort((a, b) => b.priority - a.priority || a.domain.localeCompare(b.domain))
+      .slice(0, limit)
+  }
+  const scored = filtered
+    .map((e) => ({ e, s: scoreEntry(e, tokens) }))
+    .filter((x) => x.s > 0)
+  return scored
+    .sort((a, b) => b.s - a.s || b.e.priority - a.e.priority || a.e.domain.localeCompare(b.e.domain))
+    .slice(0, limit)
+    .map((x) => x.e)
+}
+
+/**
  * Score-based search across the table. Returns entries ordered by score
  * desc, then priority desc, then domain asc.
  *
@@ -540,26 +577,7 @@ export interface MatchOptions {
  * "show me what you know").
  */
 export function searchSitemap(query: string, options: MatchOptions = {}): WebSitemapEntry[] {
-  const limit = options.limit ?? 10
-  const minPriority = options.minPriority ?? 1
-  const tokens = tokenize(query)
-  const filtered = WEB_SITEMAP.filter((e) => {
-    if (options.category && e.category !== options.category) return false
-    if (e.priority < minPriority) return false
-    if (options.region && e.region && e.region !== 'global' && e.region !== options.region) return false
-    if (options.language && e.language && e.language !== 'multi' && e.language !== options.language) return false
-    return true
-  })
-  if (tokens.length === 0) {
-    return filtered.slice().sort((a, b) => b.priority - a.priority || a.domain.localeCompare(b.domain)).slice(0, limit)
-  }
-  const scored = filtered
-    .map((e) => ({ e, s: scoreEntry(e, tokens) }))
-    .filter((x) => x.s > 0)
-  return scored
-    .sort((a, b) => b.s - a.s || b.e.priority - a.e.priority || a.e.domain.localeCompare(b.e.domain))
-    .slice(0, limit)
-    .map((x) => x.e)
+  return matchSitemap(query, options)
 }
 
 /* ──────────────────────────── URL builder ───────────────────────────── */
@@ -631,21 +649,49 @@ export function snapshot(filter?: { category?: WebSitemapCategory; minPriority?:
 }
 
 /**
+ * Options for `renderPromptDigest`. Mirrors `MatchOptions` plus a
+ * free-text `query`, so the digest can share the same scoring pipeline as
+ * `searchSitemap` and scope to MATCHING entries rather than the whole
+ * catalog.
+ */
+export interface DigestOptions {
+  /** Free-text query — when given, the digest scopes to MATCHING entries only. */
+  query?: string
+  /** Filter by category. */
+  category?: WebSitemapCategory
+  /** Drop entries below this priority. */
+  minPriority?: number
+  /** Cap the result count (default 10 when `query` is set; otherwise uncapped). */
+  limit?: number
+  /** Region filter (CN / US / …). `global` means "any". */
+  region?: WebSitemapRegion
+  /** Language filter (en / zh / …). `multi` matches everything. */
+  language?: WebSitemapLanguage
+}
+
+/**
  * Render a compact, prompt-friendly Markdown summary that the model can paste
  * into its context when it wants to recall the available authoritative
  * sources without going through the CLI again.
  *
- * The output is intentionally terse: `domain (priority) — description`.
+ * The output is intentionally terse: `domain (priority) — description`,
+ * grouped by category.
+ *
+ * When `query` is supplied the digest shares `searchSitemap`'s scoring
+ * pipeline, so the result mirrors the entries field of the same call —
+ * a `--digest` over a scoped query MUST NOT dump the entire catalog.
  */
-export function renderPromptDigest(filter?: { category?: WebSitemapCategory; minPriority?: number }): string {
-  const list = filter ? WEB_SITEMAP.filter((e) => {
-    if (filter.category && e.category !== filter.category) return false
-    if (filter.minPriority && e.priority < filter.minPriority) return false
-    return true
-  }) : WEB_SITEMAP.slice()
+export function renderPromptDigest(options: DigestOptions = {}): string {
+  const hasQuery = typeof options.query === 'string' && options.query.trim() !== ''
+  // Empty-query `--digest` is the legacy "paste the whole catalog" path:
+  // leave it uncapped so an LLM can dump it as a single Markdown block.
+  // A scoped query inherits the matching entry cap (default 10), matching
+  // what the entries field shows.
+  const limit = hasQuery ? (options.limit ?? 10) : Number.POSITIVE_INFINITY
+  const entries = matchSitemap(options.query ?? '', { ...options, limit })
   const lines: string[] = []
   let currentCat: WebSitemapCategory | '' = ''
-  for (const e of list.slice().sort((a, b) => {
+  for (const e of entries.slice().sort((a, b) => {
     if (a.category !== b.category) return a.category.localeCompare(b.category)
     if (b.priority !== a.priority) return b.priority - a.priority
     return a.domain.localeCompare(b.domain)

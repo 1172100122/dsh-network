@@ -26,7 +26,7 @@ describe('one host search path for every entrypoint', () => {
     const config = defaultConfig({ searchEngines: ['bing'] })
     const search = vi.fn().mockResolvedValue(entry)
     registerWebSearchTool({ tools: { register(value: any) { tool = value } }, systemPrompt: { section() {} } }, config, search)
-    expect(tool.parameters.properties.engine.enum).toContain('deepseek-official')
+    expect(tool.parameters.properties.engine.enum).toEqual(expect.arrayContaining(['deepseek-official', 'so360', 'mojeek-free', 'mojeek', 'tavily']))
     const signal = new AbortController().signal
     const output = await tool.execute({ query: 'fixture', count: 2, engine: 'deepseek-official' }, { signal })
     expect(search).toHaveBeenCalledWith({ query: 'fixture', count: 2, engine: 'deepseek-official' }, signal)

@@ -55,7 +55,31 @@ import {
   normalizeSearxngEndpoint,
 } from '../src/engines/searxng.ts'
 import { BRAVE_API_KEY_ENV, BraveSearchEngine, buildBraveUrl } from '../src/engines/brave.ts'
+import {
+  MOJEEK_ENGINE_ID,
+  MOJEEK_API_KEY_ENV,
+  MojeekSearchEngine,
+  buildMojeekApiUrl,
+  parseMojeekApiResults,
+} from '../src/engines/mojeek.ts'
+import {
+  TAVILY_API_KEY_ENV,
+  TAVILY_AUTH_HEADER,
+  TAVILY_ENGINE_ID,
+  TAVILY_KEYLESS_HEADER,
+  TavilySearchEngine,
+  buildTavilyRequest,
+  parseTavilyResults,
+} from '../src/engines/tavily.ts'
 import { cleanText, defaultRegistry, registerDefaultEngines } from '../src/engines/index.ts'
+import {
+  SO360_ENGINE_ID,
+  SO360_BLOCKED_MARKER,
+  So360SearchEngine,
+  buildSo360Url,
+  countSo360RichCards,
+  parseSo360Results,
+} from '../src/engines/so360.ts'
 import {
   WEB_SITEMAP,
   buildSearchUrl,
@@ -64,6 +88,7 @@ import {
   findByDomain,
   findByKey,
   listByCategory,
+  matchSitemap,
   renderPromptDigest,
   searchSitemap,
   snapshot,
@@ -359,7 +384,7 @@ describe('search engines decode entities at the parser boundary', () => {
     expect(hit?.snippet).toBe('1 000·res')
   })
 
-  it('never emits a raw reference for any of the three scraped engines', () => {
+  it('never emits a raw reference for any of the scraped engines', () => {
     // The end-to-end assertion the bug report maps to: whatever shape the
     // markup takes, no `&...;` reaches the model or a card.
     const fragments = [
@@ -370,6 +395,11 @@ describe('search engines decode entities at the parser boundary', () => {
       ),
       parseBaiduResults(
         '<div class="c-container"><h3><a href="https://e.org/3">T&amp;T</a></h3><span class="c-abstract">a&nbsp;b</span></div>',
+        5,
+      ),
+      parseSo360Results(
+        '<li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=x" data-mdurl="https://e.org/4">T&amp;T</a></h3>' +
+          '<p class="res-desc">a&nbsp;b</p></li>',
         5,
       ),
     ]
@@ -575,7 +605,157 @@ describe('GitHubSearchEngine', () => {
   it('is registered in the default registry as chain tail', () => {
     registerDefaultEngines(defaultRegistry)
     const all = defaultRegistry.all().map((e) => e.id)
-    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'github', 'searxng', 'brave'])
+    expect(all).toEqual(['bing', 'duckduckgo', 'baidu', 'so360', 'github', 'searxng', 'brave', 'mojeek-free', 'mojeek', 'tavily'])
+  })
+})
+
+// ─────────────────────────── so360 engine ────────────────────────────
+describe('So360SearchEngine', () => {
+  // Trimmed from the live 2026-10 SERP — keeps the shapes the parser
+  // keys on: heading attribute wobble, data-mdurl, both snippet layouts,
+  // rich-card containers, and the g-title heading the mohe cards use.
+  const SERP =
+    '<li class="res-list"><div id="mohe-360shoutiao_onlineAI" class="g-mohe ">' +
+    '<h3 class="g-title "><a href="https://image.so.com/i?q=x" data-md=\'{"p":"title"}\'>图片卡片</a></h3></div>' +
+    '<h3   class="res-title"><a href="https://www.so.com/link?m=aaa" data-mdurl="https://real.example/1"' +
+    " data-res='{\"tp\":21,\"pos\":1}' target=\"_blank\">大模型<em>推理</em>框架</a></h3>" +
+    '<p class="res-desc"><span class="gray g-c-gray">2024年10月11日&nbsp;-&nbsp;</span>加速推理&nbsp;的<em>用处</em></p>' +
+    '<p class="g-linkinfo"><cite><a class="g-linkinfo-a">real.example</a></cite></p></li>' +
+    '<li class="res-list"><h3 class="res-title " >' +
+    '<a  href="https://www.so.com/link?m=bbb" data-mdurl="https://real.example/2"  target="_blank">缩略图结果</a></h3>' +
+    '<div class="res-comm-con"><span class="res-list-summary">errorTS2345:Argumentof<em>type</em>&#039;Buffer&#039;' +
+    'is not assignable to parameter</span></div></li>' +
+    // `lianmeng-ad` is an empty JS-filled sidebar slot outside the flow;
+    // kept so a parser keyed on `<li>` nesting would trip over it.
+    '<div id="lm-rightbottom" class="lianmeng-ad"></div>' +
+    '<div class="g-mohe " data-mohe-type="360pic_new"><h3 class="g-title ">' +
+    '<a href="https://image.so.com/i?q=y" data-md=\'{"p":"title"}\'>图片卡片</a></h3></div>'
+
+  const engineOf = () => new So360SearchEngine()
+
+  it('composes the SERP URL and validates the only option, pn', () => {
+    expect(buildSo360Url('大模型')).toBe('https://www.so.com/s?q=%E5%A4%A7%E6%A8%A1%E5%9E%8B')
+    expect(buildSo360Url('x', { pn: 2 })).toBe('https://www.so.com/s?q=x&pn=2')
+    // Out-of-range, non-integer and unknown keys are dropped rather than
+    // forwarded: a typo in the settings textarea must not reach the host.
+    expect(buildSo360Url('x', { pn: 1 })).toBe('https://www.so.com/s?q=x')
+    expect(buildSo360Url('x', { pn: 101 })).toBe('https://www.so.com/s?q=x')
+    expect(buildSo360Url('x', { pn: 'two' })).toBe('https://www.so.com/s?q=x')
+    expect(buildSo360Url('x', { src: 'evil', foo: 1 })).toBe('https://www.so.com/s?q=x')
+  })
+
+  it('is keyless: no auth block, so the dialog never offers a key field', () => {
+    const e = engineOf()
+    expect(e.id).toBe(SO360_ENGINE_ID)
+    expect(e.endpoint).toBe('https://www.so.com/s')
+    expect(e.displayName).toBe('360搜索')
+    expect(e.auth).toBeUndefined()
+  })
+
+  it('prefers data-mdurl over the so.com/link redirect', () => {
+    const [first] = parseSo360Results(SERP, 10)
+    expect(first?.url).toBe('https://real.example/1')
+  })
+
+  it('falls back to href when a card carries no data-mdurl', () => {
+    const hits = parseSo360Results('<h3 class="res-title"><a href="https://fallback.example/9">T</a></h3>', 10)
+    expect(hits[0]?.url).toBe('https://fallback.example/9')
+  })
+
+  it('decodes entities and strips highlight markup in both snippet layouts', () => {
+    const [plain, thumbed] = parseSo360Results(SERP, 10)
+    expect(plain?.title).toBe('大模型推理框架')
+    // `&nbsp;-&nbsp;` around the date becomes ` - `; the `&nbsp;` before 的
+    // becomes a plain space (the whitespace pass runs even with no `&`).
+    expect(plain?.snippet).toBe('2024年10月11日 - 加速推理 的用处')
+    // The thumbnail layout is a `<span>`; a naive `([\s\S]*?)<\//` stops at
+    // the first `</em>` and shreds the snippet. The tempered matcher keeps it.
+    expect(thumbed?.snippet).toBe("errorTS2345:Argumentoftype'Buffer'is not assignable to parameter")
+  })
+
+  it('excludes rich cards, which carry g-title instead of res-title', () => {
+    const urls = parseSo360Results(SERP, 10).map((h) => h.url)
+    expect(urls).toEqual(['https://real.example/1', 'https://real.example/2'])
+    expect(urls.some((u) => u.includes('image.so.com'))).toBe(false)
+    expect(urls.some((u) => u.includes('ad.example'))).toBe(false)
+  })
+
+  it('decodes entity-escaped ampersands in data-mdurl', () => {
+    const [hit] = parseSo360Results(
+      '<h3 class="res-title"><a href="/l" data-mdurl="https://e.example/s?a=1&amp;src=n">T</a></h3>',
+      10,
+    )
+    expect(hit?.url).toBe('https://e.example/s?a=1&src=n')
+  })
+
+  it('counts the rich cards that displace organic results', () => {
+    expect(countSo360RichCards(SERP)).toBe(2)
+    expect(countSo360RichCards('<h3 class="res-title"><a href="https://e.org/1">T</a></h3>')).toBe(0)
+  })
+
+  describe('the anti-automation CAPTCHA (served with HTTP 200)', () => {
+    // The two marker strings (title + first line of body) come from the
+    // real block page; a parser that only looked for result headings would
+    // read this as "no results".
+    const BLOCKED =
+      '<!DOCTYPE html><html><head><title>访问异常页面</title></head><body>' +
+      '<div id="warper"><p class="warn">请输入验证码以便正常访问: 看不清，换一个</p>' +
+      '<p>您的IP是： 117.136.35.2</p></div></body></html>'
+
+    it('matches the marker on the block page and not on a real SERP', () => {
+      expect(SO360_BLOCKED_MARKER.test(BLOCKED)).toBe(true)
+      expect(SO360_BLOCKED_MARKER.test(SERP)).toBe(false)
+    })
+
+    it('reports the wall instead of parsing it as an empty index', () => {
+      // HTTP 200 + this body is NOT "360 found nothing".
+      const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: BLOCKED, status: 200, headers: {} }], 10)
+      expect(res.items).toEqual([])
+      const warning = res.warnings?.join('\n') ?? ''
+      expect(warning).toMatch(/CAPTCHA/)
+      // The remedy names the URL and the manual step — "wait and hope" strands
+      // the user on a failed search.
+      expect(warning).toContain('https://www.so.com')
+      expect(warning).toMatch(/browser/i)
+      expect(res.uncertainty).toBeUndefined()
+    })
+
+    it('never asserts an uncertainty on a blocked page', () => {
+      // An uncertainty note would tell the caller to fetch MORE pages off an
+      // IP that is already walled.
+      const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: BLOCKED, status: 200, headers: {} }], 10)
+      expect(res.uncertainty).toBeUndefined()
+    })
+
+    it('keeps the single-body path from mistaking it for an empty result set', () => {
+      expect(engineOf().parse(BLOCKED, 10)).toEqual([])
+    })
+
+    it('classifies a real 429 separately from the CAPTCHA wall', () => {
+      const res = engineOf().parseMany(
+        [{ key: SO360_ENGINE_ID, body: '', status: 429, headers: {} }],
+        10,
+      )
+      expect(res.warnings?.join('\n')).toMatch(/429/)
+    })
+  })
+
+  it('says a short list was displaced rather than exhausted', () => {
+    const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: SERP, status: 200, headers: {} }], 10)
+    expect(res.items.length).toBe(2)
+    expect(res.uncertainty?.join('\n')).toMatch(/rich-media card/)
+    expect(res.uncertainty?.join('\n')).toMatch(/pn=2/)
+  })
+
+  it('stays quiet when the caller took everything the page had', () => {
+    const res = engineOf().parseMany([{ key: SO360_ENGINE_ID, body: SERP, status: 200, headers: {} }], 2)
+    expect(res.items.length).toBe(2)
+    expect(res.uncertainty).toBeUndefined()
+  })
+
+  it('builds no request for a blank query', () => {
+    expect(engineOf().buildRequests('   ')).toEqual([])
+    expect(engineOf().buildRequests('q')?.map((r) => r.key)).toEqual([SO360_ENGINE_ID])
   })
 })
 
@@ -983,6 +1163,566 @@ describe('BraveSearchEngine', () => {
   })
 })
 
+// ─────────────────────────── mojeek (Search API) engine ───────────────────────────
+// Mojeek's official billed Search API. Distinct from `mojeek-free` — same host,
+// different credential (api_key rides in the URL, not a header / cookie), JSON
+// response (`fmt=json` is hard-coded into buildMojeekApiUrl).
+describe('MojeekSearchEngine', () => {
+  const savedOptions = process.env.DSH_NETWORK_ENGINE_OPTIONS
+  const savedKey = process.env[MOJEEK_API_KEY_ENV]
+  beforeAll(() => {
+    delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    delete process.env[MOJEEK_API_KEY_ENV]
+  })
+  afterAll(() => {
+    if (savedOptions === undefined) delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    else process.env.DSH_NETWORK_ENGINE_OPTIONS = savedOptions
+    if (savedKey === undefined) delete process.env[MOJEEK_API_KEY_ENV]
+    else process.env[MOJEEK_API_KEY_ENV] = savedKey
+  })
+
+  it('declares the url-keyed credential and never sets a header name', () => {
+    // The auth block tells the CLI to put the secret in the URL via
+    // ?api_key=… (`in === 'query'`), the opposite of Brave's header mode.
+    // A mis-spelled `in` would either strip the key (every call rejected) or
+    // silently smuggle it into a header Mojeek ignores (every call metered,
+    // key in the host's logs); both are silent defects this guard catches.
+    const engine = new MojeekSearchEngine()
+    expect(engine.id).toBe(MOJEEK_ENGINE_ID)
+    expect(engine.displayName).toBe('Mojeek (API)')
+    expect(engine.endpoint).toBe('https://www.mojeek.com/search')
+    expect(engine.auth?.in).toBe('query')
+    expect(engine.auth?.queryName).toBe('api_key')
+    expect(engine.auth?.apiKeyEnv).toBe(MOJEEK_API_KEY_ENV)
+    // Header-mode engines carry `auth.header`; a query-mode engine doesn't
+    // need one and the CLI never reads it, so omitting it is the contract.
+    expect(engine.auth?.header).toBeUndefined()
+  })
+
+  it('pins api_key= and fmt=json on every request, with t capped to 100', () => {
+    expect(buildMojeekApiUrl('rust vs go', { perPage: 10 }, 'secret-key')).toBe(
+      'https://www.mojeek.com/search?q=rust%20vs%20go&fmt=json&api_key=secret-key&t=10',
+    )
+    // The standalone-CLI `max` spelling maps to `t` too.
+    expect(buildMojeekApiUrl('q', { max: 25 }, 'k')).toContain('t=25')
+    // The per-page cap is 100, mirroring Mojeek's documented envelope.
+    expect(buildMojeekApiUrl('q', { max: 999 }, 'k')).toContain('t=100')
+    expect(buildMojeekApiUrl('q', { max: 0 }, 'k')).toContain('t=1')
+    // The `perPage` argument wins over `max`, the same precedence Brave uses.
+    expect(buildMojeekApiUrl('q', { perPage: 3, max: 10 }, 'k')).toContain('t=3')
+    // A zero/negative page offset is dropped rather than rewritten — typos
+    // don't burn billed calls.
+    expect(buildMojeekApiUrl('q', { s: 0 }, 'k')).not.toContain('s=')
+    expect(buildMojeekApiUrl('q', { s: -1 }, 'k')).not.toContain('s=')
+    expect(buildMojeekApiUrl('q', { s: 11 }, 'k')).toContain('s=11')
+  })
+
+  it('passes through only the documented option vocabulary', () => {
+    // Valid enum + numeric options survive; unknown keys, malformed values
+    // and out-of-range boosts are dropped so a typo can't reach Mojeek.
+    const url = buildMojeekApiUrl(
+      'vue 3',
+      {
+        perPage: 5,
+        since: '20260201',
+        before: 'year',
+        rb: 'gb',
+        rbb: 10,
+        lb: 'en',
+        lbb: 100,
+        lr: 'en,fr',
+        safe: 1,
+        date: 1,
+        cdate: 0,
+        size: 1,
+        site: 'mojeek.com',
+        fi: '.example.com,foo.com',
+        fe: 'spam.com',
+        tlen: 80,
+        dlen: 200,
+        datewr: 100,
+        qm: 'spam ads',
+      },
+      'k',
+    )
+    expect(url).toBe(
+      'https://www.mojeek.com/search?q=vue%203&fmt=json&api_key=k&t=5' +
+        '&since=20260201&before=year&rb=GB&rbb=10&lb=EN&lbb=100' +
+        '&lr=EN%2CFR&safe=1&date=1&cdate=0&size=1&datewr=100&tlen=80&dlen=200' +
+        '&fi=.example.com%2Cfoo.com&fe=spam.com&site=mojeek.com&qm=spam%20ads',
+    )
+    // `s=0` is dropped (the documented start range is 1..1000); the rest of
+    // the keys follow the order in `EXTRA_KEYS` so a future engine author
+    // can reason about it without an alphabetization surprise.
+    const dropped = buildMojeekApiUrl('q', {
+      since: '2026-02-01', // wrong shape → dropped
+      rb: 'England', // not 2 letters → dropped
+      rbb: 200, // out of range → dropped
+      lb: '', // empty → dropped
+      lbb: 'lots', // not an integer → dropped
+      lr: 'foo,bar', // bad ISO codes → dropped
+      safe: 2, // not 0|1 → dropped
+      date: 'yes', // not an integer → dropped
+      // A typed-string of `'1'` reads back as `1` (an integer, in {0,1}) and
+      // passes the option gate — every other engine is the same and the
+      // settings dialog is the defense, not the URL builder. Use a string
+      // that does NOT coerce to a valid integer to prove the gate works:
+      cdate: 'maybe', // not an integer → dropped
+      size: 1.5, // not an integer → dropped
+      tlen: 200, // out of 0..127 → dropped
+      dlen: 700, // out of 0..511 → dropped
+      datewr: 50, // not 0|100 → dropped
+      qm: '', // empty → dropped
+      junk: 'x', // unknown key → dropped
+    }, 'k')
+    expect(dropped).toBe('https://www.mojeek.com/search?q=q&fmt=json&api_key=k&t=10')
+  })
+
+  it('omits api_key entirely when no key is provided (callers compose what they have)', () => {
+    // The key is optional at the buildUrl level: a shell that forgot to pass
+    // one still gets a URL — the request just won't authenticate. The CLI's
+    // short-circuit (synthesized 401 for a missing key) sits upstream of this.
+    expect(buildMojeekApiUrl('q', { max: 10 }, '')).not.toContain('api_key=')
+    expect(buildMojeekApiUrl('q', { max: 10 })).not.toContain('api_key=')
+  })
+
+  it('reads per-engine options out of DSH_NETWORK_ENGINE_OPTIONS', () => {
+    process.env.DSH_NETWORK_ENGINE_OPTIONS = JSON.stringify({
+      mojeek: { date: 1, since: '20260101' },
+      other: { x: 'y' },
+    })
+    try {
+      const [req] = new MojeekSearchEngine().buildRequests('q', { perPage: 3, apiKey: 'k' })
+      expect(req?.key).toBe(MOJEEK_ENGINE_ID)
+      expect(req?.url).toContain('date=1')
+      expect(req?.url).toContain('since=20260101')
+      // A different engine's options must not leak into this one.
+      expect(req?.url).not.toContain('x=y')
+    } finally {
+      delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    }
+  })
+
+  it('parseMojeekApiResults: maps url/title/desc and clamps to max', () => {
+    const body = JSON.stringify({
+      response: {
+        status: 'OK',
+        head: { results: 2, exact: true },
+        results: [
+          {
+            url: 'https://a.example/1',
+            title: 'Rust vs Go',
+            desc: 'Benchmarks.',
+          },
+          { url: 'https://b.example/2', title: 'Go is fine', desc: 'Performance notes.' },
+          { url: 'https://c.example/3', title: 'Dropped' }, // over max
+        ],
+      },
+    })
+    const items = parseMojeekApiResults(body, 2)
+    expect(items.length).toBe(2)
+    expect(items[0]?.title).toBe('Rust vs Go')
+    expect(items[0]?.snippet).toBe('Benchmarks.')
+  })
+
+  it('parseMojeekApiResults: titles fall back to the URL, malformed URLs are dropped', () => {
+    const items = parseMojeekApiResults(
+      JSON.stringify({
+        response: {
+          status: 'OK',
+          results: [
+            { url: 'https://a.example/1', title: '' },
+            { url: '/relative', title: 'Bad URL' },
+            { url: '', title: 'Missing URL' },
+          ],
+        },
+      }),
+      10,
+    )
+    expect(items.length).toBe(1)
+    expect(items[0]?.title).toBe('https://a.example/1')
+  })
+
+  it('parseMojeekApiResults: published_at comes from the formatted `date` field', () => {
+    const items = parseMojeekApiResults(
+      JSON.stringify({
+        response: {
+          status: 'OK',
+          results: [
+            { url: 'https://a.example/1', title: 'T', date: 'Tue Jul 10 05:19:00 2007' },
+            { url: 'https://b.example/2', title: 'No date' },
+            { url: 'https://c.example/3', title: 'Bad shape', date: '2026-01-01T00:00:00' },
+          ],
+        },
+      }),
+      10,
+    )
+    expect(items[0]?.published_at).toBe('Tue Jul 10 05:19:00 2007')
+    expect(items[1]?.published_at).toBeUndefined()
+    // A field that doesn't look like Mojeek's formatted date is silently
+    // dropped — wrong dates in the evidence are worse than no dates.
+    expect(items[2]?.published_at).toBeUndefined()
+  })
+
+  it('parseMojeekApiResults: empty / non-JSON / shape-less bodies return []', () => {
+    expect(parseMojeekApiResults('', 10)).toEqual([])
+    expect(parseMojeekApiResults('not json', 10)).toEqual([])
+    expect(parseMojeekApiResults(JSON.stringify({ results: [] }), 10)).toEqual([])
+    // A `response: { status: 'OK' }` body with no `results` array returns [].
+    expect(parseMojeekApiResults(JSON.stringify({ response: { status: 'OK' } }), 10)).toEqual([])
+  })
+
+  it('parseMany: a 200 OK body with `response.status` not "OK" surfaces the error', () => {
+    // Mojeek answers 200 + `response.status === "ERROR: Daily Limit Reached"`
+    // when the day's quota runs out. The parser would otherwise read this
+    // as a successful zero-hit answer.
+    const body = JSON.stringify({
+      response: { status: 'ERROR: Daily Limit Reached' },
+    })
+    const res = new MojeekSearchEngine().parseMany([{ key: MOJEEK_ENGINE_ID, body, status: 200, headers: {} }], 10)
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('Daily Limit Reached')
+  })
+
+  it('parseMany: 401 / 403 are auth failures; 429 is rate limit; 4xx otherwise', () => {
+    const engine = new MojeekSearchEngine()
+    const auth = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 401, headers: {} }], 10)
+    expect(auth.warnings?.[0]).toContain('authentication failed')
+    expect(auth.warnings?.[0]).toContain(MOJEEK_API_KEY_ENV)
+
+    const rejected = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 403, headers: {} }], 10)
+    expect(rejected.warnings?.[0]).toContain('authentication failed')
+
+    const limited = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 429, headers: {} }], 10)
+    expect(limited.warnings?.[0]).toContain('rate limited')
+
+    const other = engine.parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 418, headers: {} }], 10)
+    expect(other.warnings?.[0]).toContain('unexpected HTTP 418')
+  })
+
+  it('parseMany: synthetic 401 (no key) names the fix and names the env var', () => {
+    // Same shape Brave tests; the only thing that differs is the env var
+    // name the warning points the user at. Verify it by name so a future
+    // rename of DSH_NETWORK_MOJEEK_API_KEY is caught here.
+    const res = new MojeekSearchEngine().parseMany([{ key: MOJEEK_ENGINE_ID, body: '', status: 401, headers: {} }], 10)
+    expect(res.warnings?.[0]).toContain(MOJEEK_API_KEY_ENV)
+  })
+
+  it('parseMany: a non-JSON body is reported, not parsed as zero hits', () => {
+    const res = new MojeekSearchEngine().parseMany(
+      [{ key: MOJEEK_ENGINE_ID, body: '<html>unexpected</html>', status: 200, headers: {} }],
+      10,
+    )
+    expect(res.warnings?.[0]).toContain('not JSON')
+  })
+
+  it('parseMany: transport failure lands in warnings, not in items', () => {
+    const res = new MojeekSearchEngine().parseMany(
+      [{ key: MOJEEK_ENGINE_ID, body: '', status: 0, error: 'getaddrinfo ENOTFOUND www.mojeek.com' }],
+      10,
+    )
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('ENOTFOUND')
+  })
+
+  it('parseMany: a 200 with `response.status === "ERROR"` still parses results when present', () => {
+    // Defect class: the daily-limit message and a non-empty result list
+    // shouldn't co-exist, but if Mojeek ever answers both ways (e.g. a
+    // soft quota warning) the parser should surface the warning AND pass
+    // the rows through.
+    const body = JSON.stringify({
+      response: {
+        status: 'ERROR: Soft warning',
+        results: [{ url: 'https://a.example/1', title: 'T' }],
+      },
+    })
+    const res = new MojeekSearchEngine().parseMany([{ key: MOJEEK_ENGINE_ID, body, status: 200, headers: {} }], 10)
+    expect(res.items.length).toBe(1)
+    expect(res.warnings?.[0]).toContain('Soft warning')
+  })
+
+  it('parse: single-body compatibility path mirrors parseMany', () => {
+    const body = JSON.stringify({
+      response: { status: 'OK', results: [{ url: 'https://a.example/1', title: 'T', desc: 'S' }] },
+    })
+    const items = new MojeekSearchEngine().parse(body, 10)
+    expect(items.length).toBe(1)
+    expect(items[0]?.snippet).toBe('S')
+  })
+})
+
+describe('TavilySearchEngine', () => {
+  const savedOptions = process.env.DSH_NETWORK_ENGINE_OPTIONS
+  const savedKey = process.env[TAVILY_API_KEY_ENV]
+  beforeAll(() => {
+    delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    delete process.env[TAVILY_API_KEY_ENV]
+  })
+  afterAll(() => {
+    if (savedOptions === undefined) delete process.env.DSH_NETWORK_ENGINE_OPTIONS
+    else process.env.DSH_NETWORK_ENGINE_OPTIONS = savedOptions
+    if (savedKey === undefined) delete process.env[TAVILY_API_KEY_ENV]
+    else process.env[TAVILY_API_KEY_ENV] = savedKey
+  })
+
+  it('declares the bearer credential and the documented keyless fallback header', () => {
+    // The two halves of Tavily's unique auth story: `auth.optional: true`
+    // bypasses the synthetic-401 gate (verified below), and `fallbackHeader`
+    // is what `authFor` sends when no key is configured. Wrong spelling on
+    // either would silently rate-limit the user without explanation.
+    const engine = new TavilySearchEngine()
+    expect(engine.id).toBe(TAVILY_ENGINE_ID)
+    expect(engine.displayName).toBe('Tavily Search')
+    expect(engine.endpoint).toBe('https://api.tavily.com/search')
+    expect(engine.auth?.header).toBe(TAVILY_AUTH_HEADER)
+    expect(engine.auth?.scheme).toBe('bearer')
+    expect(engine.auth?.apiKeyEnv).toBe(TAVILY_API_KEY_ENV)
+    expect(engine.auth?.optional).toBe(true)
+    expect(engine.auth?.fallbackHeader).toEqual({
+      name: TAVILY_KEYLESS_HEADER,
+      value: 'keyless',
+    })
+  })
+
+  it('buildRequests pins POST + JSON body + content-type, max_results clamped 1..20', () => {
+    const req = buildTavilyRequest('rust vs go', {})
+    expect(req?.method).toBe('POST')
+    expect(req?.url).toBe('https://api.tavily.com/search')
+    expect(req?.contentType).toBe('application/json')
+    const body = JSON.parse(String(req?.body))
+    expect(body.query).toBe('rust vs go')
+    // Default 10 when neither perPage nor max is supplied.
+    expect(body.max_results).toBe(10)
+    // The call's result cap (perPage) wins over the single-shot fallback.
+    const upper = buildTavilyRequest('q', { perPage: 25 })
+    expect(upper?.body && JSON.parse(upper.body).max_results).toBe(20)
+    const lower = buildTavilyRequest('q', { perPage: 0 })
+    expect(lower?.body && JSON.parse(lower.body).max_results).toBe(1)
+    // Standalone-CLI `max` spelling maps to the same field.
+    const standalone = buildTavilyRequest('q', { max: 8 })
+    expect(standalone?.body && JSON.parse(standalone.body).max_results).toBe(8)
+  })
+
+  it('passes through only the documented option vocabulary', () => {
+    // Valid enum / numeric options survive; unknown keys and out-of-range
+    // values are dropped so a typo cannot burn a credit on a 422.
+    const req = buildTavilyRequest('vue 3', {
+      searchDepth: 'advanced',
+      topic: 'news',
+      timeRange: 'pw', // not in vocabulary → dropped
+      includeAnswer: 'basic',
+      includeRawContent: 'text', // not in vocabulary → dropped
+      excludeDomains: 'spam.com,ads.com',
+      includeFavicon: true,
+      exactMatch: true,
+      safeSearch: false,
+      includeImages: true,
+      includeImageDescriptions: true,
+      chunksPerSource: 4, // out of range → dropped
+      country: 'Germany',
+      language: 'en',
+      includeDomains: 'docs.example.com',
+      includeDomainsMode: 'prefer',
+      startDate: '2026-01-01',
+      endDate: '2026-12-31',
+      bogus: 'unknown key',
+    })
+    const body = JSON.parse(String(req?.body))
+    // `timeRange: 'pw'` and `chunksPerSource: 4` and `includeRawContent: 'text'` are out of vocab.
+    expect(body.search_depth).toBe('advanced')
+    expect(body.topic).toBe('news')
+    expect(body.time_range).toBeUndefined()
+    expect(body.include_answer).toBe('basic')
+    expect(body.include_raw_content).toBeUndefined()
+    expect(body.exclude_domains).toEqual(['spam.com', 'ads.com'])
+    expect(body.include_domains).toEqual(['docs.example.com'])
+    expect(body.include_domains_mode).toBe('prefer')
+    expect(body.include_favicon).toBe(true)
+    expect(body.exact_match).toBe(true)
+    expect(body.safe_search).toBe(false)
+    expect(body.include_images).toBe(true)
+    expect(body.include_image_descriptions).toBe(true)
+    expect(body.chunks_per_source).toBeUndefined()
+    expect(body.country).toBe('germany')
+    expect(body.language).toBe('en')
+    expect(body).not.toHaveProperty('bogus')
+    expect(body).not.toHaveProperty('start_date')
+  })
+
+  it('include_domains_mode is only emitted alongside an include_domains list', () => {
+    // Tavily answers 400 for `include_domains_mode` on its own, and a
+    // 400 on a billed engine is exactly what the option gate exists to
+    // prevent. The mode is therefore subordinate to the list.
+    const modeAlone = JSON.parse(String(buildTavilyRequest('q', { includeDomainsMode: 'prefer' })?.body))
+    expect(modeAlone).not.toHaveProperty('include_domains_mode')
+    expect(modeAlone).not.toHaveProperty('include_domains')
+    // An invalid list (empty after trim) must not resurrect the mode.
+    const emptyList = JSON.parse(String(buildTavilyRequest('q', { includeDomains: ' , ', includeDomainsMode: 'prefer' })?.body))
+    expect(emptyList).not.toHaveProperty('include_domains')
+    expect(emptyList).not.toHaveProperty('include_domains_mode')
+  })
+
+  it('include_image_descriptions is gated on include_images', () => {
+    // Upstream renders descriptions INSIDE each image entry, so the flag
+    // alone does nothing. Dropping it keeps the recorded request honest
+    // about what the billed call actually used.
+    const withoutImages = JSON.parse(String(buildTavilyRequest('q', { includeImageDescriptions: true })?.body))
+    expect(withoutImages).not.toHaveProperty('include_image_descriptions')
+    const withImages = JSON.parse(String(buildTavilyRequest('q', { includeImages: true, includeImageDescriptions: true })?.body))
+    expect(withImages.include_image_descriptions).toBe(true)
+    // An explicit `includeImages=false` is still an explicit value, and the
+    // gate reads `=== true`, so the description is dropped with it.
+    const imagesOff = JSON.parse(String(buildTavilyRequest('q', { includeImages: false, includeImageDescriptions: true })?.body))
+    expect(imagesOff.include_images).toBe(false)
+    expect(imagesOff).not.toHaveProperty('include_image_descriptions')
+  })
+
+  it('country is locked to the OpenAPI enum; language has a permissive shape check', () => {
+    const bad = buildTavilyRequest('q', { country: 'Middle-earth' })
+    expect(JSON.parse(String(bad?.body))).not.toHaveProperty('country')
+    const good = buildTavilyRequest('q', { country: 'united states' })
+    expect(JSON.parse(String(good?.body)).country).toBe('united states')
+    // Language must be a short token; a stray newline wouldn't work.
+    const broken = buildTavilyRequest('q', { language: 'en\nUS' })
+    expect(JSON.parse(String(broken?.body))).not.toHaveProperty('language')
+  })
+
+  it('parseTavilyResults: happy path with published_date round-trips', () => {
+    const body = JSON.stringify({
+      query: 'rust vs go',
+      results: [
+        {
+          url: 'https://a.example/1',
+          title: 'Rust vs Go benchmarks',
+          content: 'A comparison of Rust and Go performance.',
+          score: 0.81,
+          published_date: 'Tue, 11 Mar 2025 17:00:00 GMT',
+        },
+        {
+          url: 'https://b.example/2',
+          title: 'Go is fine',
+          content: 'Notes.',
+        },
+      ],
+      response_time: 1.67,
+    })
+    const items = parseTavilyResults(body, 10)
+    expect(items.length).toBe(2)
+    expect(items[0]?.published_at).toBe('Tue, 11 Mar 2025 17:00:00 GMT')
+    expect(items[0]?.snippet).toContain('Rust and Go performance')
+    expect(items[1]?.published_at).toBeUndefined()
+  })
+
+  it('parseTavilyResults: bad URLs / relative URLs / missing titles degrade silently', () => {
+    const body = JSON.stringify({
+      results: [
+        { url: '/relative', title: 'Bad URL' },
+        { url: '', title: 'Missing URL' },
+        { url: 'https://a.example/1', title: '' },
+        { url: 'https://a.example/1', title: 'Duplicate' },
+      ],
+    })
+    const items = parseTavilyResults(body, 10)
+    expect(items.length).toBe(1) // only the absolute-URL + dedup'd entry
+    expect(items[0]?.url).toBe('https://a.example/1')
+    expect(items[0]?.title).toBe('https://a.example/1')
+  })
+
+  it('parseTavilyResults: empty / non-JSON / shape-less bodies return []', () => {
+    expect(parseTavilyResults('', 10)).toEqual([])
+    expect(parseTavilyResults('not json', 10)).toEqual([])
+    expect(parseTavilyResults(JSON.stringify({ results: [] }), 10)).toEqual([])
+    // A `{}` body with no `results` array returns [].
+    expect(parseTavilyResults(JSON.stringify({ query: 'x' }), 10)).toEqual([])
+  })
+
+  it('parseMany: a 401 / 403 surfaces the credential fix and names the env var', () => {
+    const engine = new TavilySearchEngine()
+    const auth = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '{"detail":{"error":"missing api key"}}', status: 401, headers: {} }], 10)
+    expect(auth.warnings?.[0]).toContain('authentication failed')
+    expect(auth.warnings?.[0]).toContain(TAVILY_API_KEY_ENV)
+    expect(auth.warnings?.[0]).toContain('keyless mode')
+    const forbidden = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 403, headers: {} }], 10)
+    expect(forbidden.warnings?.[0]).toContain('authentication failed')
+  })
+
+  it('parseMany: 422 distinguishes auth-shaped rejection from query rejection', () => {
+    // Tavily answers 422 for both auth-shape problems and query-validation
+    // problems; the body sniff is what separates them so the wrong
+    // suggestion is never printed.
+    const engine = new TavilySearchEngine()
+    const authBody = JSON.stringify({ detail: [{ loc: ['body', 'api_key'], msg: 'missing api key' }] })
+    const authSniff = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: authBody, status: 422, headers: {} }], 10)
+    expect(authSniff.warnings?.[0]).toContain('authentication')
+    const query = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '{"detail":[{"msg":"invalid search_depth"}]}', status: 422, headers: {} }], 10)
+    expect(query.warnings?.[0]).toContain('query rejected')
+    expect(query.warnings?.[0]).not.toContain('network → 搜索引擎')
+  })
+
+  it('parseMany: 429 / 432 / 433 each land in their own bucket', () => {
+    const engine = new TavilySearchEngine()
+    const limited = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 429, headers: {} }], 10)
+    expect(limited.warnings?.[0]).toContain('rate limited')
+    expect(limited.warnings?.[0]).toContain('keyless')
+    const plan = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 432, headers: {} }], 10)
+    expect(plan.warnings?.[0]).toContain('plan / key limit')
+    const paygo = engine.parseMany([{ key: TAVILY_ENGINE_ID, body: '', status: 433, headers: {} }], 10)
+    expect(paygo.warnings?.[0]).toContain('pay-as-you-go limit')
+  })
+
+  it('parseMany: a non-JSON 200 body is reported, not parsed as zero hits', () => {
+    // Two-body race: 200 with a wrong-shape body still classifies as an
+    // unexpected response, never a silent zero. The chain falls through,
+    // and the user gets the actionable warning rather than a confusing
+    // "no results" line.
+    const engine = new TavilySearchEngine()
+    const res = engine.parseMany(
+      [{ key: TAVILY_ENGINE_ID, body: '<html>unexpected</html>', status: 200, headers: {} }],
+      10,
+    )
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('not JSON')
+  })
+
+  it('parseMany: a slow response_time surfaces an uncertainty hint', () => {
+    const body = JSON.stringify({
+      query: 'q',
+      results: [{ url: 'https://a.example/1', title: 'T' }],
+      response_time: 31.4,
+    })
+    const res = new TavilySearchEngine().parseMany(
+      [{ key: TAVILY_ENGINE_ID, body, status: 200, headers: {} }],
+      10,
+    )
+    expect(res.uncertainty?.[0]).toContain('31.4s')
+  })
+
+  it('parseMany: transport failure lands in warnings, items stay empty', () => {
+    const res = new TavilySearchEngine().parseMany(
+      [{ key: TAVILY_ENGINE_ID, body: '', status: 0, error: 'getaddrinfo ENOTFOUND api.tavily.com' }],
+      10,
+    )
+    expect(res.items).toEqual([])
+    expect(res.warnings?.[0]).toContain('ENOTFOUND')
+  })
+
+  it('parse: single-body compatibility path mirrors parseMany', () => {
+    const body = JSON.stringify({
+      results: [{ url: 'https://a.example/1', title: 'T', content: 'S' }],
+    })
+    const items = new TavilySearchEngine().parse(body, 10)
+    expect(items.length).toBe(1)
+    expect(items[0]?.snippet).toBe('S')
+  })
+
+  it('buildRequests returns [] on an empty query (no POST issued)', () => {
+    // The auth-blocked gate in cli.ts would catch this downstream, but the
+    // engine itself is supposed to short-circuit before the wire.
+    expect(buildTavilyRequest('')).toBeNull()
+    expect(buildTavilyRequest('   ')).toBeNull()
+  })
+})
+
 // ─────────────────────────── html.ts ──────────────────────────
 describe('htmlToMarkdown', () => {
   it('htmlToMarkdown: basic document', () => {
@@ -1302,5 +2042,37 @@ describe('web_sitemap table', () => {
     const md = renderPromptDigest({ minPriority: 9 })
     expect(md).toMatch(/^# /m)
     expect(md.split('\n').filter((l) => l.startsWith('- ')).length).toBeGreaterThan(5)
+  })
+
+  it('renderPromptDigest honors a free-text query (regression: --digest ignored `-q`)', () => {
+    // Whole-catalog digest (no query, no cap) — legacy "--digest" alone path.
+    const full = renderPromptDigest()
+    const fullRows = full.split('\n').filter((l) => l.startsWith('- '))
+    expect(fullRows.length).toBe(WEB_SITEMAP.length)
+
+    // Query-scoped digest MUST share `searchSitemap`'s match scope; otherwise
+    // the model would paste 178 unrelated entries over a focused "github"
+    // question. (Digest renders in category order; the match list is in
+    // score order — compare as SETS, not sequences.)
+    const focused = renderPromptDigest({ query: 'github' })
+    const focusedDomains = new Set(
+      focused.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.split(' ')[1]!),
+    )
+    const expected = new Set(matchSitemap('github').map((e) => e.domain))
+    expect(focusedDomains).toEqual(expected)
+    expect(focusedDomains.size).toBeGreaterThan(0)
+    expect(focusedDomains.size).toBeLessThan(fullRows.length)
+    // Sanity: github/related hits actually surface; unrelated ones do not.
+    expect(focusedDomains.has('github.com')).toBe(true)
+    expect(focusedDomains.has('wikipedia.org')).toBe(false)
+  })
+
+  it('renderPromptDigest honors an explicit limit when query is set', () => {
+    const five = renderPromptDigest({ query: 'rust', limit: 3 })
+    const rows = five.split('\n').filter((l) => l.startsWith('- '))
+    expect(rows.length).toBeLessThanOrEqual(3)
+    const expected = new Set(matchSitemap('rust', { limit: 3 }).map((e) => e.domain))
+    const got = new Set(rows.map((l) => l.split(' ')[1]!))
+    expect(got).toEqual(expected)
   })
 })

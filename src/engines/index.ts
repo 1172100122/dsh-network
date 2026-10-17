@@ -23,9 +23,51 @@ export * from './header-profiles.ts'
 export { BingSearchEngine } from './bing.ts'
 export { DuckDuckGoSearchEngine } from './duckduckgo.ts'
 export { BaiduSearchEngine } from './baidu.ts'
+export {
+  So360SearchEngine,
+  SO360_ENGINE_ID,
+  SO360_ORIGIN,
+  SO360_ENDPOINT,
+  SO360_BLOCKED_MARKER,
+  buildSo360Url,
+  countSo360RichCards,
+  parseSo360Results,
+} from './so360.ts'
 export { GitHubSearchEngine, routeGithubIndexes } from './github.ts'
 export { SearxngSearchEngine, SEARXNG_DEFAULT_ENDPOINT, SEARXNG_ENV, buildSearxngUrl, normalizeSearxngEndpoint } from './searxng.ts'
 export { BraveSearchEngine, BRAVE_ENDPOINT, BRAVE_API_KEY_ENV, BRAVE_AUTH_HEADER, buildBraveUrl } from './brave.ts'
+export {
+  MojeekFreeSearchEngine,
+  MOJEEK_FREE_ENGINE_ID,
+  MOJEEK_FREE_ORIGIN,
+  MOJEEK_FREE_ENDPOINT,
+  MOJEEK_FREE_CHALLENGE_URL,
+  MOJEEK_FREE_VERIFY_URL,
+  MOJEEK_FREE_AUTH_HEADER,
+  MOJEEK_FREE_COOKIE_ENV,
+  MOJEEK_FREE_CHALLENGE_MARKER,
+  MOJEEK_FREE_RESULTS_PER_PAGE,
+  buildMojeekUrl,
+  parseMojeekResults,
+} from './mojeek-free.ts'
+export {
+  MojeekSearchEngine,
+  MOJEEK_ENGINE_ID,
+  MOJEEK_ENDPOINT,
+  MOJEEK_API_KEY_ENV,
+  buildMojeekApiUrl,
+  parseMojeekApiResults,
+} from './mojeek.ts'
+export {
+  TavilySearchEngine,
+  TAVILY_ENGINE_ID,
+  TAVILY_ENDPOINT,
+  TAVILY_API_KEY_ENV,
+  TAVILY_AUTH_HEADER,
+  TAVILY_KEYLESS_HEADER,
+  buildTavilyRequest,
+  parseTavilyResults,
+} from './tavily.ts'
 // web_sitemap is the curated portal catalog used by the LLM to pick
 // authoritative sources. It lives outside the engine registry (it is
 // pure data, not a search backend) so we only re-export it from here
@@ -36,40 +78,47 @@ import { SearchEngineRegistry, type SearchEngine } from './types.ts'
 import { BingSearchEngine } from './bing.ts'
 import { DuckDuckGoSearchEngine } from './duckduckgo.ts'
 import { BaiduSearchEngine } from './baidu.ts'
+import { So360SearchEngine } from './so360.ts'
 import { GitHubSearchEngine } from './github.ts'
 import { SearxngSearchEngine } from './searxng.ts'
 import { BraveSearchEngine } from './brave.ts'
+import { MojeekFreeSearchEngine } from './mojeek-free.ts'
+import { MojeekSearchEngine } from './mojeek.ts'
+import { TavilySearchEngine } from './tavily.ts'
 
 /** The process-wide registry. Call `registerDefaultEngines` at startup. */
 export const defaultRegistry = new SearchEngineRegistry()
 
 /**
- * Register Bing, DuckDuckGo, Baidu, GitHub, SearXNG, and Brave as the
- * search chain.
+ * Register Bing, DuckDuckGo, Baidu, 360搜索, GitHub, SearXNG, Brave,
+ * Mojeek (free), Mojeek (official Search API) and Tavily as the search chain.
  *
- * Order matters: the chain runs engines in registration order, so the
- * most reliable one (Bing) goes first. GitHub sits near the tail — it is
- * a fallback for code/ecosystem queries and its anonymous search quota is
- * only 10 req/min per IP. SearXNG sits LAST: it targets a self-hosted
- * instance that is not guaranteed to be running, so it is never part of
- * the DEFAULT chain (`DSH_NETWORK_SEARCH_ENGINES` defaults to
- * bing,duckduckgo,baidu) — users opt in via the env var or the settings
- * UI, and its requests get loopback access only when the configured
- * endpoint is itself private (see `engineAllowsPrivate` in cli.ts).
- * Brave is registered after it for the same reason plus one more: it is
- * billed per query (no free tier since Feb 2026), so it must never sit in
- * a default chain that could silently spend money. Users add or pin it
- * explicitly. Users can override the chain order via the
- * `DSH_NETWORK_SEARCH_ENGINES` env var.
+ * The chain runs engines in registration order, so the most reliable (Bing)
+ * goes first. Registration order is NOT the default chain — that is
+ * `DEFAULT_SEARCH_ENGINES` in config.ts, which stops at Baidu.
+ *
+ * The two Mojeek engines are registered LAST on purpose: their credentials
+ * are different (a cookie for `mojeek-free`, an API key for `mojeek`), but
+ * they share a host and so should sit at the chain tail for the same reason
+ * a fresh install must not touch mojeek.com unless explicitly added.
+ *
+ * Tavily sits at the very tail: every query is billed and the keyless tier
+ * is rate-limited, so a fresh install must not hit api.tavily.com at all.
+ *
+ * Override the chain via `DSH_NETWORK_SEARCH_ENGINES` or the settings UI.
  */
 export function registerDefaultEngines(registry: SearchEngineRegistry = defaultRegistry): readonly SearchEngine[] {
   const engines: SearchEngine[] = [
     new BingSearchEngine(),
     new DuckDuckGoSearchEngine(),
     new BaiduSearchEngine(),
+    new So360SearchEngine(),
     new GitHubSearchEngine(),
     new SearxngSearchEngine(),
     new BraveSearchEngine(),
+    new MojeekFreeSearchEngine(),
+    new MojeekSearchEngine(),
+    new TavilySearchEngine(),
   ]
   for (const e of engines) registry.register(e)
   return engines
